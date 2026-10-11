@@ -1,21 +1,8 @@
-<div align="center">
-
 # Brew Full Update
 
-**One command to bring a Mac fully up to date.**
+A zsh script that updates a Mac in one go: Homebrew formulae and casks, Mac App Store apps, `nodenv`/`pyenv`/`rbenv` sync, and cleanup. It reports what failed at the end instead of leaving you to scroll back through the output. There's also a small Mac app that runs the same script.
 
-Homebrew formulae and casks, Mac App Store apps, language-runtime sync and cleanup,
-finished with a clear report of what worked and what didn't.
-
-[![Latest release](https://img.shields.io/github/v/release/AlbiDR/Brew-Full-Update?style=flat-square&color=4f7aa8)](https://github.com/AlbiDR/Brew-Full-Update/releases/latest)
-![macOS](https://img.shields.io/badge/macOS-Homebrew-4f7aa8?style=flat-square)
-![zsh](https://img.shields.io/badge/shell-zsh-4f7aa8?style=flat-square)
-
-[Install](#install) · [Usage](#usage) · [What it does](#what-it-does) · [Configuration](#configuration) · [Troubleshooting](#troubleshooting) · [Development](#development)
-
-</div>
-
----
+This is what `brew-full-update --dry-run` prints (a dry run changes nothing):
 
 ```
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
@@ -25,60 +12,80 @@ finished with a clear report of what worked and what didn't.
   ┌──────────────────────────────────────────────────────────────────────────┐
   │ SYSTEM INTEGRITY & DIAGNOSTICS                                           │
   └──────────────────────────────────────────────────────────────────────────┘
+    Testing upstream internet connectivity...
     ✓  Network connection stable
+
+    Indexing registries & calculating payloads...
     ✓  Registries indexed (1 updates identified)
+
+    Analyzing system architecture...
     ✓  System health optimal
 
   ┌──────────────────────────────────────────────────────────────────────────┐
   │ BINARY DEPLOYMENT                                                        │
   └──────────────────────────────────────────────────────────────────────────┘
+    ℹ  Would update 1 formula
+
     UPGRADE QUEUE
     ────────────────────────────────────────────────────────────────────────
       ↑  supabase/tap/supabase        2.117.0 → 2.120.0
+
+    PREVIEW (DRY-RUN)
+    ────────────────────────────────────────────────────────────────────────
+    These formulae would be upgraded. Run without --dry-run to install.
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ APPLICATION (CASK) DEPLOYMENT                                            │
+  └──────────────────────────────────────────────────────────────────────────┘
+    (Excluding: alfred, daisydisk, gemini, macdroid, topaz-gigapixel, topaz-photo, topaz-video, commander-one)
+
+    ✓  All applications up-to-date
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ MAC APP STORE SYNC                                                       │
+  └──────────────────────────────────────────────────────────────────────────┘
+    Checking App Store updates...
+    ✓  All App Store items up-to-date
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ DEVELOPMENT RUNTIME SYNC                                                 │
+  └──────────────────────────────────────────────────────────────────────────┘
+    Would align development environments...
+    ℹ  Node environment sync would run
+    ℹ  Python environment sync would run
+    ℹ  Ruby environment sync would run
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ STORAGE OPTIMIZATION                                                     │
+  └──────────────────────────────────────────────────────────────────────────┘
+    Pruning orphaned files and caches...
+    ℹ  Storage cleanup skipped in dry-run mode
 
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ SYSTEM UPDATE COMPLETE (4s) (DRY-RUN - no changes made)                      ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ```
 
-<sub>A real dry run, trimmed. Colour in the terminal.</sub>
-
-## Why
-
-Keeping a Mac current usually means `brew update`, `brew upgrade`, `brew upgrade --cask`, `mas upgrade`, a few cleanup commands, and hoping nothing failed quietly. This does all of it in one pass, refuses to upgrade apps you have open, skips the ones you don't want touched, and tells you plainly at the end how it went.
-
-## Features
-
-- **Preview first.** `--dry-run` shows every pending upgrade and changes nothing. It doesn't even ask for your password.
-- **Respects what's open.** A cask is skipped if its app is currently running.
-- **Honest reporting.** Each step is counted. The closing banner and notification say if anything failed, and where to look.
-- **Full log.** Complete output of every step goes to `~/Library/Logs/brew-full-update.log`.
-- **Opt-outs.** Keep chosen casks out of upgrades with a one-line list.
-- **Health check.** Flags missing dependencies and deprecated or disabled packages.
-- **Fails safe.** Offline? It stops with exit code 1 instead of pretending to succeed.
-
 ## Install
 
-**Requirements:** macOS with [Homebrew](https://brew.sh) and zsh. Optional: [`mas`](https://github.com/mas-cli/mas) for App Store updates, and `nodenv`, `pyenv` or `rbenv` for runtime sync. Missing optional tools are skipped, not errors.
+You need macOS, Homebrew and zsh. [`mas`](https://github.com/mas-cli/mas) and the `*env` tools are optional; the script skips whatever isn't installed.
 
-### Shell command
+**Shell command**
 
 ```zsh
 git clone https://github.com/AlbiDR/Brew-Full-Update.git ~/Brew-Full-Update
 ```
 
-Add to `~/.zshrc`:
+then add to `~/.zshrc`:
 
 ```zsh
 source ~/Brew-Full-Update/brew_full_update.zsh
 alias brew-full-update='brew_full_update'
 ```
 
-### Mac app
+**Mac app**
 
-Download `Brew-Full-Update-v*.zip` from the [latest release](https://github.com/AlbiDR/Brew-Full-Update/releases/latest), unzip, and put the app anywhere.
-
-The app is ad-hoc signed rather than notarized, so macOS blocks the first launch. Right-click it, choose **Open**, and confirm. Or clear the quarantine flag once:
+Grab the zip from the [latest release](https://github.com/AlbiDR/Brew-Full-Update/releases/latest) and unzip it. The app isn't notarized, so macOS blocks the first launch: right-click it, choose Open, confirm. Or run this once:
 
 ```bash
 xattr -dr com.apple.quarantine "Brew Full Update.app"
@@ -87,86 +94,70 @@ xattr -dr com.apple.quarantine "Brew Full Update.app"
 ## Usage
 
 ```zsh
-brew-full-update              # run the update
-brew-full-update --dry-run    # preview only (-d also works)
+brew-full-update              # update everything
+brew-full-update --dry-run    # preview only; also -d
 ```
 
-The app asks **Update**, **Dry Run** or **Cancel** when it opens (Update is chosen automatically after 10 seconds), then runs the same script in Terminal.
+The app asks Update, Dry Run or Cancel when you open it, and picks Update after 10 seconds. Then it runs the script in Terminal.
 
-## What it does
+## What it runs
 
-| # | Step | Action |
-| - | --- | --- |
-| 1 | Diagnostics | Checks connectivity, runs `brew update`, lists what is outdated, flags missing or deprecated packages |
-| 2 | Formulae | Upgrades outdated formulae one at a time |
-| 3 | Casks | Upgrades outdated casks, skipping excluded ones and any whose app is running |
-| 4 | App Store | `mas upgrade`, if `mas` is installed |
-| 5 | Runtimes | `brew nodenv-sync`, `pyenv-sync` and `rbenv-sync` |
-| 6 | Cleanup | `brew autoremove` and `brew cleanup --prune=7` (downloads and old versions kept for a week) |
+1. Checks the network (exits with code 1 if it's down), runs `brew update`, lists outdated packages, and flags missing or deprecated ones.
+2. Upgrades formulae one by one.
+3. Upgrades casks one by one. It skips excluded casks and any app that's currently running.
+4. `mas upgrade`, if `mas` is installed.
+5. `brew nodenv-sync`, `pyenv-sync`, `rbenv-sync`.
+6. `brew autoremove` and `brew cleanup --prune=7`, so downloads and old versions stick around for a week.
 
-Admin rights are requested once at the start and kept alive for the run, because some cask installers need them.
+A real run asks for your admin password once at the start, since some cask installers need it, and keeps it alive until the script finishes. A dry run doesn't ask.
 
-## Configuration
+Every step's output goes to `~/Library/Logs/brew-full-update.log`, which resets once it passes 1 MB. If any step fails, the closing banner and the notification say so and point to that file.
 
-Casks whose name **starts with** an entry in `BFU_EXCLUDED_CASKS` are never upgraded. The default list is at the top of `brew_full_update.zsh`. To use your own without editing the file, define the array before sourcing it:
+## Excluding casks
+
+Any cask whose name starts with an entry in `BFU_EXCLUDED_CASKS` is left alone, so `topaz-photo` also covers `topaz-photo-ai`. The default list is at the top of `brew_full_update.zsh`. To use your own without editing the file, set it before sourcing:
 
 ```zsh
 BFU_EXCLUDED_CASKS=(alfred daisydisk)
 source ~/Brew-Full-Update/brew_full_update.zsh
 ```
 
-| Item | Location |
-| --- | --- |
-| Run log | `~/Library/Logs/brew-full-update.log` (reset when it passes 1 MB) |
-| Excluded casks | `BFU_EXCLUDED_CASKS` |
+## When something goes wrong
 
-## Troubleshooting
+- **A step shows ✗.** Check the log; every step has a timestamped header with its raw output.
+- **An app was skipped.** It was running. Quit it and run again.
+- **"skipped" next to Node, Python or Ruby.** That tool isn't installed. Nothing to fix.
+- **An excluded cask still gets upgraded.** Exclusions match from the start of the cask name, so check the exact name with `brew list --cask`.
 
-**macOS says the app "can't be opened".** It isn't notarized. See [Mac app](#mac-app) for the right-click or `xattr` fix.
-
-**A step shows ✗ failed.** Open the log: `open ~/Library/Logs/brew-full-update.log`. Each step has a timestamped header followed by the raw output.
-
-**An app was skipped.** It was running. Quit it and run again.
-
-**A cask I excluded still shows up.** Exclusions match the cask *name* from the start (`topaz` covers `topaz-photo-ai`). Check the exact name with `brew list --cask`.
-
-**Sync steps say "skipped".** `nodenv`, `pyenv` or `rbenv` isn't installed. That's expected.
-
-## Uninstall
-
-Remove the two lines from `~/.zshrc`, delete the cloned folder or the app, and optionally delete `~/Library/Logs/brew-full-update.log`.
+To uninstall, remove the two lines from `~/.zshrc` and delete the folder or the app.
 
 ## Development
 
 ```
-brew_full_update.zsh        the script (single source of truth)
-launcher.applescript.in     app launcher template
-build-app.sh                builds and verifies the .app
-tests/run.sh                tests against a fake brew
-assets/                     app icon
+brew_full_update.zsh      the script
+launcher.applescript.in   app launcher template
+build-app.sh              builds and verifies the app
+tests/run.sh              tests against a fake brew
+assets/                   app icon
 ```
 
-```zsh
-tests/run.sh      # nothing on your system is touched
-./build-app.sh    # produces build/Brew Full Update.app
-```
+`tests/run.sh` doesn't touch your system. `./build-app.sh` writes `build/Brew Full Update.app` and checks that the script embedded in it is identical to the source. Set `BFU_SIGN_ID` to sign with a real certificate; the default is an ad-hoc signature, which means macOS may ask for privacy approvals again after a rebuild.
 
-`build-app.sh` embeds the script into the app and checks the copy is identical to the source. Set `BFU_SIGN_ID` to sign with a real identity instead of ad-hoc; a stable identity lets macOS remember privacy approvals across rebuilds.
-
-The app writes a temporary `.command` file and opens it in Terminal, so the run uses a non-interactive shell and never reads `~/.zshrc`.
+The app saves a temporary `.command` file and opens it in Terminal, so the script runs in a non-interactive shell and never reads `~/.zshrc`.
 
 ## Changelog
 
-### 8.3
-- Aborts (exit 1) when offline instead of reporting success.
-- Real version numbers in the upgrade queue; exclusions match by name prefix.
-- Running-app guard uses each cask's actual `.app` names.
-- Sudo keep-alive is cleaned up reliably; Ctrl-C stops the run.
-- Per-step logging, plus a failure count in the closing banner and notification.
-- Deprecated-package check reads `brew info --json=v2` instead of scraping `brew doctor`.
-- `cleanup --prune=7` instead of `--prune=all`; removed the no-op `--greedy`.
-- Exclusion list is configuration (`BFU_EXCLUDED_CASKS`).
-- App: Update / Dry Run dialog, `.command` launch, reproducible build script.
+**8.3**
+- Exits with code 1 when offline instead of finishing with a success banner.
+- Shows real version numbers in the upgrade queue.
+- Exclusions match by name prefix.
+- Skips casks whose app is running, using the app names Homebrew reports.
+- Cleans up the sudo keep-alive; Ctrl-C now stops the run.
+- Logs every step and counts failures.
+- Finds deprecated packages through `brew info --json=v2` instead of parsing `brew doctor`.
+- `cleanup --prune=7` replaces `--prune=all`; dropped `--greedy`, which did nothing here.
+- Exclusion list is now `BFU_EXCLUDED_CASKS`.
+- App: Update / Dry Run dialog, `.command` launch, `build-app.sh`.
 
-### 8.2
-- Initial hardened version.
+**8.2**
+- First hardened version.
