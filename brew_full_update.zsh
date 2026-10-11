@@ -138,7 +138,7 @@ print_top_banner() {
   [[ "$brewv" == *">="* || -z "$brewv" ]] && brewv="Homebrew"
   when=$(date '+%-d %b, %H:%M')
   sub="  ${host} · macOS ${macos} · ${brewv} · ${when}"
-  max=$(( BFU_W - 4 ))
+  max=$(( BFU_W - 5 ))
   (( ${#sub} > max )) && sub="${sub[1,max-1]}…"
 
   local right_plain="v${BFU_VERSION}" right_styled="${dim}v${BFU_VERSION}${reset}"
@@ -306,6 +306,7 @@ print_summary() {
     name="${BFU_STEP_TITLES[i]}"
     note="${BFU_STEP_NOTES[i]:-done}"
     secs="${BFU_STEP_SECS[i]:-0}"
+    (( ${#note} > BFU_W - 35 )) && note="${note[1,BFU_W-36]}…"
     case "$note" in
       *failed*) icon="✗"; color="$accent_red" ;;
       *skipped*|*"not installed"*|*"dry run"*|*"would"*) icon="○"; color="$accent_cyan" ;;

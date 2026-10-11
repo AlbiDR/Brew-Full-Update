@@ -106,6 +106,15 @@ BFU_W=78
 out=$(reset='\033[0m' bold='\033[1m' _bfu_box_row "x" "${bold}x${reset}" "" "" )
 [[ "$out" != *'\033'* ]] && ok "box row: colour codes are interpreted" || bad "box row escapes" "$out"
 
+# --- narrow layout: summary rows and header never overflow the box
+BFU_W=50; BFU_STEP=0; BFU_STEP_TITLES=(); BFU_STEP_SECS=(); BFU_STEP_NOTES=(); BFU_STEP_T0=""
+print_section "Dev runtimes" >/dev/null; _bfu_step_note "Node ✓ · Python ✓ · Ruby ✓ · and a very long extra note"
+out=$(DRY_RUN=false BFU_FAILS=0 BFU_UPGRADED=0 BFU_SKIPPED_NAMES=() BFU_LOG=/x print_summary 3 2>&1)
+w_top=$(print -r -- "$out" | grep "╭" | head -1); bad_rows=0
+while IFS= read -r l; do [[ "$l" == *"│"* && ${#l} -ne ${#w_top} ]] && bad_rows=$((bad_rows+1)); done <<< "$out"
+eq "narrow summary: every row as wide as the border" "$bad_rows" "0"
+BFU_W=78; BFU_STEP=0; BFU_STEP_TITLES=(); BFU_STEP_SECS=(); BFU_STEP_NOTES=()
+
 # --- step bookkeeping and summary rows
 BFU_STEP=0; BFU_STEP_TITLES=(); BFU_STEP_SECS=(); BFU_STEP_NOTES=(); BFU_STEP_T0=""
 print_section "Formulae" >/dev/null; _bfu_step_note "2 upgraded"
