@@ -6,7 +6,7 @@ This is what `brew-full-update --dry-run` prints (a dry run changes nothing):
 
 ```
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ BREW COMMAND CENTER [DRY-RUN]                                                ┃
+┃ BREW COMMAND CENTER  v8.5  [DRY-RUN]                                         ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
   ┌──────────────────────────────────────────────────────────────────────────┐
@@ -24,7 +24,7 @@ This is what `brew-full-update --dry-run` prints (a dry run changes nothing):
   ┌──────────────────────────────────────────────────────────────────────────┐
   │ BINARY DEPLOYMENT                                                        │
   └──────────────────────────────────────────────────────────────────────────┘
-    ℹ  Would update 1 formula
+    ·  Would update 1 formula
 
     UPGRADE QUEUE
     ────────────────────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ This is what `brew-full-update --dry-run` prints (a dry run changes nothing):
   ┌──────────────────────────────────────────────────────────────────────────┐
   │ APPLICATION (CASK) DEPLOYMENT                                            │
   └──────────────────────────────────────────────────────────────────────────┘
-    (Excluding: alfred, daisydisk, gemini, macdroid, topaz-gigapixel, topaz-photo, topaz-video, commander-one)
+    (Excluding: alfred, daisydisk, gemini, macdroid, topaz-gigapixel +3 more)
 
     ✓  All applications up-to-date
 
@@ -51,18 +51,18 @@ This is what `brew-full-update --dry-run` prints (a dry run changes nothing):
   │ DEVELOPMENT RUNTIME SYNC                                                 │
   └──────────────────────────────────────────────────────────────────────────┘
     Would align development environments...
-    ℹ  Node environment sync would run
-    ℹ  Python environment sync would run
-    ℹ  Ruby environment sync would run
+    ·  Node environment sync would run
+    ·  Python environment sync would run
+    ·  Ruby environment sync would run
 
   ┌──────────────────────────────────────────────────────────────────────────┐
   │ STORAGE OPTIMIZATION                                                     │
   └──────────────────────────────────────────────────────────────────────────┘
     Pruning orphaned files and caches...
-    ℹ  Storage cleanup skipped in dry-run mode
+    ·  Storage cleanup skipped in dry-run mode
 
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ SYSTEM UPDATE COMPLETE (4s) (DRY-RUN - no changes made)                      ┃
+┃ SYSTEM UPDATE COMPLETE · 4s · dry run, no changes made                       ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ```
 
@@ -113,6 +113,8 @@ A real run asks for your admin password once at the start, since some cask insta
 
 Before the first upgrade, the versions you have installed are written to the log, so you can see what to roll back to if an update breaks something.
 
+Output is plain text when piped to a file, or when `NO_COLOR` is set.
+
 Every step's output goes to `~/Library/Logs/brew-full-update.log`, which resets once it passes 1 MB. If any step fails, the closing banner and the notification say so and point to that file.
 
 ## Excluding casks
@@ -148,6 +150,14 @@ assets/                   app icon
 The app saves a temporary `.command` file and opens it in Terminal, so the script runs in a non-interactive shell and never reads `~/.zshrc`.
 
 ## Changelog
+
+**8.5**
+- Each package line shows its version change: `[2/3] wget 1.25.0 → 1.26.0`.
+- Closing summary: upgraded, skipped and failed counts, plus which running apps were skipped.
+- Header shows the version; layout adapts to narrow terminals.
+- Plain output (no colour codes) when piped or when `NO_COLOR` is set.
+- Consistent single-width symbols; removed doubled blank lines; long exclusion list shortened to `+N more`.
+- App: the Update / Dry Run dialog shows the app icon.
 
 **8.4**
 - Live spinner with elapsed time for each upgrade instead of a silent wait.

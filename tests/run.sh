@@ -31,6 +31,25 @@ BFU_FAILS=0
 print_action_result x fail >/dev/null; print_action_result y done >/dev/null; print_action_result z fail >/dev/null
 eq "fail counter counts only failures" "$BFU_FAILS" "2"
 
+# --- exclusion note fits the layout width
+BFU_W=78; BFU_EXCLUDED_CASKS=(alfred daisydisk)
+eq "excluded note: short list in full" "$(_bfu_excluded_note)" "Excluding: alfred, daisydisk"
+BFU_EXCLUDED_CASKS=(aaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbb cccccccccccccccc dddddddddddddddd eeeeeeeeeeeeeeee)
+note=$(_bfu_excluded_note)
+[[ "$note" == *"+"*" more" && ${#note} -le 78 ]] && ok "excluded note: long list truncated with +N more" || bad "excluded note truncation" "$note"
+BFU_EXCLUDED_CASKS=()
+
+# --- closing summary
+out=$(DRY_RUN=false BFU_FAILS=1 BFU_UPGRADED=3 BFU_SKIPPED_NAMES=(slack chrome) BFU_LOG=/x print_bottom_banner 9 2>&1)
+[[ "$out" == *"3 upgraded"*"2 skipped"*"1 failed"* && "$out" == *"slack, chrome"* && "$out" == *"FAILURE"* ]] \
+  && ok "summary: counts, skipped names, failure banner" || bad "summary" "$out"
+
+# --- colour handling
+out=$(NO_COLOR=1 zsh -c "source '$src'; _bfu_init_ui; print_status '✓' \"\$accent_green\" hi" | LC_ALL=C grep -c $'\033' )
+eq "NO_COLOR: no escape codes" "$out" "0"
+out=$(zsh -c "source '$src'; _bfu_init_ui; print_status '✓' \"\$accent_green\" hi" | LC_ALL=C grep -c $'\033' )
+eq "piped output: no escape codes" "$out" "0"
+
 # --- spinner/retry helper (non-TTY, so no spinner output)
 BFU_LOG=$(mktemp); BFU_RETRIED=""; BFU_RUN_SECS=0
 _bfu_attempt "T" true; rc=$?
