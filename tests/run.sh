@@ -31,6 +31,21 @@ BFU_FAILS=0
 print_action_result x fail >/dev/null; print_action_result y done >/dev/null; print_action_result z fail >/dev/null
 eq "fail counter counts only failures" "$BFU_FAILS" "2"
 
+# --- spinner/retry helper (non-TTY, so no spinner output)
+BFU_LOG=$(mktemp); BFU_RETRIED=""; BFU_RUN_SECS=0
+_bfu_attempt "T" true; rc=$?
+eq "attempt: success, no retry" "$rc/${BFU_RETRIED:-none}" "0/none"
+_bfu_attempt "T" false >/dev/null; rc=$?
+eq "attempt: failure retried once, returns failure" "$rc/$BFU_RETRIED" "1/1"
+flag=$(mktemp -u)
+flaky() { if [[ -e "$flag" ]]; then return 0; else touch "$flag"; return 1; fi }
+_bfu_attempt "T" flaky >/dev/null; rc=$?
+eq "attempt: fails then succeeds on retry" "$rc/$BFU_RETRIED" "0/1"
+eq "attempt note: retried" "$(_bfu_attempt_note | tr -d ' ' | sed 's/[0-9]*s/Ns/')" "(Ns,retried)"
+rm -f "$flag"
+BFU_FAILS=0
+eq "attempt: output of the command lands in the log" "$( _bfu_attempt "T" echo hello-from-step; grep -c '^hello-from-step$' "$BFU_LOG")" "1"
+
 # --- orchestrator, with a fake brew and no network
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 cat > "$tmp/brew" <<'B'

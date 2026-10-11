@@ -1,10 +1,10 @@
 #!/usr/bin/env zsh
 
 # ============================================================================
-# BREW FULL UPDATE - Comprehensive System Synchronization (v8.3)
+# BREW FULL UPDATE - Comprehensive System Synchronization (v8.4)
 # ============================================================================
 
-BFU_VERSION="8.3"
+BFU_VERSION="8.4"
 
 # ----------------------------------------------------------------------------
 # CONFIGURATION
@@ -304,11 +304,10 @@ update_formulae() {
       local pkg_name=$(echo "$line" | awk '{print $1}')
       print_action_start "$i" "$count" "$pkg_name"
       
-      _bfu_log "brew upgrade --formula $pkg_name"
-      if brew upgrade --formula "$pkg_name" < /dev/null >> "$BFU_LOG" 2>&1; then
-        print_action_result "Installed and verified" "done"
+      if _bfu_attempt "Installing" brew upgrade --formula "$pkg_name"; then
+        print_action_result "Installed and verified$(_bfu_attempt_note)" "done"
       else
-        print_action_result "Installation failed" "fail"
+        print_action_result "Installation failed$(_bfu_attempt_note)" "fail"
       fi
       printf "\n"
       
@@ -372,11 +371,10 @@ update_casks() {
       if _bfu_cask_running "$cask_name"; then
         print_action_result "Application running (skipped)" "skip"
       else
-        _bfu_log "brew upgrade --cask --force $cask_name"
-        if brew upgrade --cask --force "$cask_name" < /dev/null >> "$BFU_LOG" 2>&1; then
-          print_action_result "Deployed and verified" "done"
+        if _bfu_attempt "Deploying" brew upgrade --cask --force "$cask_name"; then
+          print_action_result "Deployed and verified$(_bfu_attempt_note)" "done"
         else
-          print_action_result "Deployment failed" "fail"
+          print_action_result "Deployment failed$(_bfu_attempt_note)" "fail"
         fi
       fi
       printf "\n"
@@ -422,11 +420,10 @@ update_app_store() {
   else
     print_subsection "SYNCHRONIZATION"
     
-    _bfu_log "mas upgrade"
-    if mas upgrade < /dev/null >> "$BFU_LOG" 2>&1; then
-      print_action_result "App Store synchronized" "done"
+    if _bfu_attempt "Updating" mas upgrade; then
+      print_action_result "App Store synchronized$(_bfu_attempt_note)" "done"
     else
-      print_action_result "Sync failed (manual sign-in required)" "fail"
+      print_action_result "Sync failed (manual sign-in required)$(_bfu_attempt_note)" "fail"
     fi
   fi
 }
@@ -563,8 +560,68 @@ _bfu_deprecated() {
   ' 2>/dev/null
 }
 
-# Stop the sudo keepalive loop (SUDO_PID is global so traps can see it).
+# Run a command in the background with a live spinner (TTY only).
+# Output goes to the log. Returns the command's exit status.
+_bfu_run() {
+  local label="$1"; shift
+  "$@" < /dev/null >> "$BFU_LOG" 2>&1 &
+  BFU_CHILD_PID=$!
+  if [[ -t 1 ]]; then
+    local frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) n=1 t0=$SECONDS
+    printf '\033[?25l'
+    while kill -0 "$BFU_CHILD_PID" 2>/dev/null; do
+      printf "\r          ${accent_cyan}%s${reset} ${dim}%s... %ss${reset}\033[K" "${frames[n]}" "$label" "$((SECONDS - t0))"
+      n=$(( n % ${#frames} + 1 ))
+      sleep 0.1
+    done
+    printf '\r\033[K\033[?25h'
+  fi
+  wait "$BFU_CHILD_PID" 2>/dev/null
+  local rc=$?
+  BFU_CHILD_PID=""
+  return $rc
+}
+
+# Run a command with a spinner; if it fails, retry once.
+# Sets BFU_RUN_SECS (total seconds) and BFU_RETRIED (1 if a retry happened).
+_bfu_attempt() {
+  local label="$1"; shift
+  local start=$SECONDS rc
+  BFU_RETRIED=""
+  _bfu_log "$*"
+  _bfu_run "$label" "$@"; rc=$?
+  if (( rc != 0 )); then
+    BFU_RETRIED=1
+    _bfu_log "FAILED (exit $rc), retrying once: $*"
+    printf "          ${accent_amber}↻ Failed, retrying once${reset}\n"
+    _bfu_run "$label (retry)" "$@"; rc=$?
+  fi
+  BFU_RUN_SECS=$(( SECONDS - start ))
+  return $rc
+}
+
+# " (12s)" or " (12s, after retry)" for the result line.
+_bfu_attempt_note() {
+  if [[ -n "$BFU_RETRIED" ]]; then
+    printf ' (%ss, retried)' "$BFU_RUN_SECS"
+  else
+    printf ' (%ss)' "$BFU_RUN_SECS"
+  fi
+}
+
+# Record installed versions in the log before anything is upgraded, for rollback.
+_bfu_snapshot() {
+  _bfu_log "PRE-UPGRADE SNAPSHOT: formulae"
+  brew list --formula --versions >> "$BFU_LOG" 2>&1
+  _bfu_log "PRE-UPGRADE SNAPSHOT: casks"
+  brew list --cask --versions >> "$BFU_LOG" 2>&1
+}
+
+# Stop the sudo keepalive loop and any running step (globals so traps can see them).
 _bfu_cleanup() {
+  [[ -n "$BFU_CHILD_PID" ]] && kill "$BFU_CHILD_PID" 2>/dev/null
+  BFU_CHILD_PID=""
+  [[ -t 1 ]] && printf '\033[?25h'
   [[ -n "$SUDO_PID" ]] && kill "$SUDO_PID" 2>/dev/null
   SUDO_PID=""
 }
@@ -592,7 +649,7 @@ brew_full_update() {
   local OUTDATED_CASKS=""
   local PREFETCH_PID=""
   typeset -g SUDO_PID=""
-  typeset -g BFU_FAILS=0
+  typeset -g BFU_FAILS=0 BFU_CHILD_PID="" BFU_RETRIED="" BFU_RUN_SECS=0
   typeset -g BFU_LOG="$HOME/Library/Logs/brew-full-update.log"
   mkdir -p "${BFU_LOG:h}"
   # Keep the log bounded: start fresh once it passes 1 MB.
@@ -629,6 +686,11 @@ brew_full_update() {
   if ! check_system_health; then
     printf "\n${accent_red}  UPDATE ABORTED: Please check your network connection.${reset}\n\n"
     return 1
+  fi
+
+  if [[ "$DRY_RUN" != true && ( -n "$OUTDATED_FORMULAE" || -n "$OUTDATED_CASKS" ) ]]; then
+    _bfu_snapshot
+    printf "\n    ${dim}Installed versions saved to the log (rollback reference)${reset}\n"
   fi
   
   update_formulae

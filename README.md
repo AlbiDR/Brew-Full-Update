@@ -103,13 +103,15 @@ The app asks Update, Dry Run or Cancel when you open it, and picks Update after 
 ## What it runs
 
 1. Checks the network (exits with code 1 if it's down), runs `brew update`, lists outdated packages, and flags missing or deprecated ones.
-2. Upgrades formulae one by one.
-3. Upgrades casks one by one. It skips excluded casks and any app that's currently running.
+2. Upgrades formulae one by one, with a spinner and elapsed time for each. A failed upgrade is retried once.
+3. Upgrades casks the same way. It skips excluded casks and any app that's currently running.
 4. `mas upgrade`, if `mas` is installed.
 5. `brew nodenv-sync`, `pyenv-sync`, `rbenv-sync`.
 6. `brew autoremove` and `brew cleanup --prune=7`, so downloads and old versions stick around for a week.
 
 A real run asks for your admin password once at the start, since some cask installers need it, and keeps it alive until the script finishes. A dry run doesn't ask.
+
+Before the first upgrade, the versions you have installed are written to the log, so you can see what to roll back to if an update breaks something.
 
 Every step's output goes to `~/Library/Logs/brew-full-update.log`, which resets once it passes 1 MB. If any step fails, the closing banner and the notification say so and point to that file.
 
@@ -146,6 +148,11 @@ assets/                   app icon
 The app saves a temporary `.command` file and opens it in Terminal, so the script runs in a non-interactive shell and never reads `~/.zshrc`.
 
 ## Changelog
+
+**8.4**
+- Live spinner with elapsed time for each upgrade instead of a silent wait.
+- A failed formula, cask or App Store upgrade is retried once; the result line says if it was.
+- Installed versions are saved to the log before upgrading, as a rollback reference.
 
 **8.3**
 - Exits with code 1 when offline instead of finishing with a success banner.
