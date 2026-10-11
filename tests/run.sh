@@ -51,6 +51,23 @@ eq "NO_COLOR: no escape codes" "$out" "0"
 out=$(zsh -c "source '$src'; _bfu_init_ui; print_status '✓' \"\$accent_green\" hi" | LC_ALL=C grep -c $'\033' )
 eq "piped output: no escape codes" "$out" "0"
 
+# --- version bump classification and badges
+eq "bump: major" "$(_bfu_bump 1.25.0 2.0.0)" "major"
+eq "bump: minor" "$(_bfu_bump 1.25.0 1.26.0)" "minor"
+eq "bump: patch" "$(_bfu_bump 1.25.0 1.25.3)" "patch"
+eq "bump: multi-version current uses the first" "$(_bfu_bump "1.0, 0.9" 1.1)" "minor"
+eq "bump: non-numeric falls back to update" "$(_bfu_bump latest 2.0)" "update"
+eq "bump: casks with commas" "$(_bfu_bump 130.0.1 "131.0.2,abc")" "major"
+
+# --- hints for known failures
+[[ "$(_bfu_hint "Your Command Line Tools (CLT) does not support macOS 27.")" == *"xcode-select --install"* ]] && ok "hint: Command Line Tools" || bad "hint CLT" ""
+eq "hint: unknown errors get no hint" "$(_bfu_hint "something odd")" ""
+
+# --- progress line and gradient
+eq "bar: half filled" "$(_bfu_bar 4 8 8 | LC_ALL=en_US.UTF-8 sed 's/\x1b\[[0-9;]*m//g')" "━━━━────"
+eq "bar: never empty once started" "$(_bfu_bar 1 100 8 | sed 's/\x1b\[[0-9;]*m//g')" "━───────"
+eq "gradient: plain text without colours" "$(reset="" _bfu_gradient "Brew")" "Brew"
+
 # --- long failure reasons wrap instead of being cut off
 BFU_W=50; BFU_LAST_ERROR="Your Command Line Tools do not support this version of macOS and must be updated before building"
 out=$(print_failure_reason); rows=$(print "$out" | wc -l | tr -d ' ')
@@ -72,7 +89,7 @@ rm -f "$flag"
 _bfu_attempt "T" sh -c 'echo "Error: Your CLT does not support macOS 27." >&2; echo "more noise" >&2; exit 1' >/dev/null
 eq "failure reason: first Error line, prefix removed" "$BFU_LAST_ERROR" "Your CLT does not support macOS 27."
 out=$(BFU_LAST_ERROR="Error: boom" print_failure_reason)
-[[ "$out" == *"↳ Error: boom"* ]] && ok "failure reason: printed under the result" || bad "print_failure_reason" "$out"
+[[ "$out" == *"┃ Error: boom"* ]] && ok "failure reason: printed under the result" || bad "print_failure_reason" "$out"
 _bfu_attempt "T" true; eq "failure reason: cleared after a success" "$BFU_LAST_ERROR" ""
 BFU_FAILS=0
 eq "attempt: output of the command lands in the log" "$( _bfu_attempt "T" echo hello-from-step; grep -c '^hello-from-step$' "$BFU_LOG")" "1"

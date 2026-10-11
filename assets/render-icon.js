@@ -1,0 +1,15 @@
+ObjC.import("AppKit");
+var img = $.NSImage.alloc.initWithContentsOfFile("icon.svg");
+var out = "size=" + img.size.width + "x" + img.size.height + " reps=" + img.representations.count;
+var size = 1024;
+var dst = $.NSImage.alloc.initWithSize($.NSMakeSize(size, size));
+dst.lockFocus;
+img.drawInRectFromRectOperationFraction($.NSMakeRect(0, 0, size, size), $.NSZeroRect, $.NSCompositingOperationSourceOver, 1.0);
+dst.unlockFocus;
+var tiff = dst.TIFFRepresentation;
+var rep = $.NSBitmapImageRep.imageRepWithData(tiff);
+var png = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $.NSDictionary.dictionary);
+png.writeToFileAtomically("icon_1024.png", true);
+var r2 = $.NSBitmapImageRep.imageRepWithData(png);
+var c = r2.colorAtXY(5,5), m = r2.colorAtXY(512,300);
+out + " corner=" + c.alphaComponent.toFixed(2) + " body=" + m.alphaComponent.toFixed(2) + " rgb=" + [m.redComponent,m.greenComponent,m.blueComponent].map(function(x){return x.toFixed(2)}).join(",");

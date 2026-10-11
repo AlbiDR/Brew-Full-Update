@@ -1,12 +1,13 @@
 #!/usr/bin/env zsh
 
 # ============================================================================
-# BREW FULL UPDATE (v9.1)
+# BREW FULL UPDATE (v10.0)
 # One command to update Homebrew formulae and casks, Mac App Store apps and
 # language-runtime installs, then clean up and report what happened.
 # ============================================================================
 
-BFU_VERSION="9.1"
+BFU_VERSION="10.0"
+BFU_TOTAL_STEPS=6
 
 # ----------------------------------------------------------------------------
 # CONFIGURATION
@@ -29,24 +30,26 @@ BFU_VERSION="9.1"
 # ============================================================================
 # Layout width and colours are (re)computed on every run by _bfu_init_ui, so
 # piped output and NO_COLOR get plain text without affecting later runs.
+# Set BFU_FORCE_COLOR=1 to keep colours when piping (e.g. into `less -R`).
 typeset -g BFU_W=78
-reset='' bold='' dim='' accent_blue='' accent_cyan='' accent_green='' accent_amber='' accent_red=''
+reset='' bold='' dim='' track='' accent_blue='' accent_cyan='' accent_green='' accent_amber='' accent_red=''
+typeset -ga BFU_GRAD=(69 75 81 80 79 78)
 
-# Per-run step tracking, used for the closing summary.
-typeset -g BFU_STEP=0 BFU_STEP_T0=""
+# Per-run state used by the closing summary.
+typeset -g BFU_STEP=0 BFU_STEP_T0="" BFU_PENDING=0
 typeset -ga BFU_STEP_TITLES BFU_STEP_SECS BFU_STEP_NOTES
 
 _bfu_init_ui() {
   # Box padding counts characters, so a UTF-8 locale is required (the app may launch us without one).
   [[ "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == *[Uu][Tt][Ff]* ]] || export LC_CTYPE=en_US.UTF-8
 
-  if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
-    reset='\033[0m';  bold='\033[1m';  dim='\033[38;5;244m'
+  if [[ ( -t 1 || -n "${BFU_FORCE_COLOR:-}" ) && -z "${NO_COLOR:-}" ]]; then
+    reset='\033[0m';  bold='\033[1m';  dim='\033[38;5;245m';  track='\033[38;5;238m'
     accent_blue='\033[38;5;75m';    accent_cyan='\033[38;5;80m'
     accent_green='\033[38;5;114m';  accent_amber='\033[38;5;179m'
     accent_red='\033[38;5;203m'
   else
-    reset='' bold='' dim='' accent_blue='' accent_cyan='' accent_green='' accent_amber='' accent_red=''
+    reset='' bold='' dim='' track='' accent_blue='' accent_cyan='' accent_green='' accent_amber='' accent_red=''
   fi
 
   # Fit the terminal when it is narrower than the default 78-column layout.
@@ -80,6 +83,34 @@ _bfu_box_top()    { printf "  ${accent_blue}╭$(draw_line ─ $(( BFU_W - 2 )))
 _bfu_box_divider(){ printf "  ${accent_blue}├$(draw_line ─ $(( BFU_W - 2 )))┤${reset}\n"; }
 _bfu_box_bottom() { printf "  ${accent_blue}╰$(draw_line ─ $(( BFU_W - 2 )))╯${reset}\n"; }
 
+# Text with a blue-to-teal gradient (plain text when colours are off).
+_bfu_gradient() {
+  local text="$1"
+  if [[ -z "$reset" ]]; then printf '%s' "$text"; return; fi
+  local out="" i n=${#text} idx
+  for (( i = 1; i <= n; i++ )); do
+    idx=$(( (i - 1) * ${#BFU_GRAD} / n + 1 ))
+    out+="\033[38;5;${BFU_GRAD[idx]}m${text[i]}"
+  done
+  printf '%s' "${out}${reset}"
+}
+
+# Thin progress line: _bfu_bar DONE TOTAL [WIDTH]  ->  ━━━━────
+_bfu_bar() {
+  local done_=$1 total=$2 w=${3:-8} filled
+  (( total > 0 )) || total=1
+  filled=$(( done_ * w / total ))
+  (( done_ > 0 && filled == 0 )) && filled=1
+  (( filled > w )) && filled=$w
+  printf '%b%s%b%s%b' "$accent_cyan" "$(draw_line ━ $filled)" "$track" "$(draw_line ─ $(( w - filled )))" "$reset"
+}
+
+# Window/tab title (TTY only).
+_bfu_title() {
+  [[ -t 1 ]] && printf '\033]0;%s\007' "$1"
+  return 0
+}
+
 # ============================================================================
 # SECTIONS & STATUS LINES
 # ============================================================================
@@ -97,38 +128,50 @@ _bfu_step_note() {
 
 # Header banner: name and version, then machine context.
 print_top_banner() {
-  local title="$1"
+  local title="◆ $1"
   local host macos brewv when sub max
   host=$(scutil --get ComputerName 2>/dev/null || hostname -s)
   macos=$(sw_vers -productVersion 2>/dev/null)
   brewv=$(brew --version 2>/dev/null | head -1 | sed -E 's/-[0-9]+-g[0-9a-f]+$//')
-  when=$(date '+%a %-d %b, %H:%M')
-  sub="${host} · macOS ${macos} · ${brewv} · ${when}"
-  max=$(( BFU_W - 6 ))
+  # Without git (e.g. Command Line Tools missing) brew reports ">=x.y.z (shallow or no git repository)".
+  brewv="${brewv%% [(]*}"
+  [[ "$brewv" == *">="* || -z "$brewv" ]] && brewv="Homebrew"
+  when=$(date '+%-d %b, %H:%M')
+  sub="  ${host} · macOS ${macos} · ${brewv} · ${when}"
+  max=$(( BFU_W - 4 ))
   (( ${#sub} > max )) && sub="${sub[1,max-1]}…"
 
   local right_plain="v${BFU_VERSION}" right_styled="${dim}v${BFU_VERSION}${reset}"
   if [[ "$DRY_RUN" == true ]]; then
     right_plain="dry run  v${BFU_VERSION}"
-    right_styled="${accent_amber}dry run${reset}  ${dim}v${BFU_VERSION}${reset}"
+    right_styled="${bold}${accent_amber}dry run${reset}  ${dim}v${BFU_VERSION}${reset}"
   fi
 
   printf "\n"
   _bfu_box_top
-  _bfu_box_row "$title" "${bold}${title}${reset}" "$right_plain" "$right_styled"
+  _bfu_box_row "$title" "${bold}$(_bfu_gradient "$title")${reset}" "$right_plain" "$right_styled"
   _bfu_box_row "$sub" "${dim}${sub}${reset}" "" ""
   _bfu_box_bottom
 }
 
-# Numbered section rule: "── 2 · Formulae ─────────────"
+# Numbered section rule with a progress rail: "── 2 · Formulae ───────── ●●○○○○"
 print_section() {
   _bfu_step_close
   BFU_STEP=$(( BFU_STEP + 1 ))
   BFU_STEP_TITLES[$BFU_STEP]="$1"
   BFU_STEP_T0=$SECONDS
-  local label="${BFU_STEP} · $1"
-  local fill=$(( BFU_W - ${#label} - 4 ))
-  printf "\n  ${accent_blue}──${reset} ${bold}%s${reset} ${accent_blue}%s${reset}\n\n" "$label" "$(draw_line ─ $fill)"
+
+  local label="${BFU_STEP} · $1" i rail="" rail_plain=""
+  for (( i = 1; i <= BFU_TOTAL_STEPS; i++ )); do
+    rail_plain+="●"
+    if (( i < BFU_STEP )); then rail+="${accent_blue}●${reset}"
+    elif (( i == BFU_STEP )); then rail+="${bold}${accent_cyan}●${reset}"
+    else rail+="${track}●${reset}"; fi
+  done
+  local fill=$(( BFU_W - ${#label} - ${#rail_plain} - 5 ))
+  (( fill < 2 )) && fill=2
+  printf "\n  ${accent_blue}──${reset} ${bold}%s${reset} ${accent_blue}%s${reset} %b\n\n" "$label" "$(draw_line ─ $fill)" "$rail"
+  _bfu_title "Brew Full Update · ${BFU_STEP}/${BFU_TOTAL_STEPS} $1"
 }
 
 print_subsection() {
@@ -140,19 +183,51 @@ print_status() {
   printf "    ${2}${1}${reset}  ${3}\n"
 }
 
-# [1/3]  name  1.0 → 2.0
+# "2/5 ━━━━────  name  1.0 → 2.0": position, progress line, name, versions.
 print_action_start() {
-  printf "    ${dim}[${reset}${accent_cyan}%s${dim}/${reset}${accent_cyan}%s${dim}]${reset}  ${bold}%s${reset}  ${dim}%s${reset}\n" "$1" "$2" "$3" "$4"
+  local index="$1" total="$2" w=${#2}
+  printf "    ${accent_cyan}%*s${dim}/%s${reset} %b  ${bold}%s${reset}  ${dim}%s${reset}\n" \
+    "$w" "$index" "$total" "$(_bfu_bar "$index" "$total" 8)" "$3" "$4"
 }
 
-# Aligned upgrade-queue row: name, current version, new version.
+# major / minor / patch / update, from two version strings.
+_bfu_bump() {
+  local old="${1%%[, ]*}" new="${2%%[, ]*}"
+  local -a o n
+  o=("${(@s:.:)old}"); n=("${(@s:.:)new}")
+  local i a b
+  for (( i = 1; i <= ${#n}; i++ )); do
+    a="${o[i]//[^0-9]/}"; b="${n[i]//[^0-9]/}"
+    if [[ -z "$a" || -z "$b" ]]; then printf 'update'; return; fi
+    if (( a != b )); then
+      case $i in 1) printf 'major' ;; 2) printf 'minor' ;; *) printf 'patch' ;; esac
+      return
+    fi
+  done
+  printf 'update'
+}
+
+# Coloured tag for a bump kind.
+_bfu_badge() {
+  case "$1" in
+    major)  printf '%b' "${bold}${accent_amber}major${reset}" ;;
+    minor)  printf '%b' "${accent_cyan}minor${reset}" ;;
+    patch)  printf '%b' "${dim}patch${reset}" ;;
+    *)      printf '%b' "${dim}update${reset}" ;;
+  esac
+}
+
+# Aligned upgrade-queue row: name, current -> new version, and a major/minor/patch tag.
 print_item_with_versions() {
   local name="$1" current="$2" new="$3"
   if [[ -z "$new" ]]; then
     printf "      ${accent_amber}↑${reset}  %-*s  ${dim}%s${reset}\n" "${BFU_NAME_W:-28}" "$name" "$current"
-  else
-    printf "      ${accent_amber}↑${reset}  %-*s  ${dim}%s${reset} → ${accent_green}%s${reset}\n" "${BFU_NAME_W:-28}" "$name" "$current" "$new"
+    return
   fi
+  local pad=$(( ${BFU_VER_W:-0} - ${#current} - ${#new} - 3 ))
+  (( pad < 0 )) && pad=0
+  printf "      ${accent_amber}↑${reset}  %-*s  ${dim}%s${reset} → ${accent_green}%s${reset}%*s  %b\n" \
+    "${BFU_NAME_W:-28}" "$name" "$current" "$new" "$pad" "" "$(_bfu_badge "$(_bfu_bump "$current" "$new")")"
 }
 
 print_action_result() {
@@ -165,7 +240,28 @@ print_action_result() {
   printf "          ${color}${symbol} ${action}${reset}\n"
 }
 
-# Closing summary card: overall result, one row per step, total time.
+# One-line suggestion for known failure messages.
+_bfu_hint() {
+  case "$1" in
+    *"Command Line Tools"*|*CLT*) printf 'Reinstall the Command Line Tools: xcode-select --install' ;;
+    *"Permission denied"*|*"not writable"*) printf 'Fix the permissions on that path, then run again' ;;
+    *"Could not resolve host"*|*"Failed to connect"*|*"timed out"*) printf 'Looks like a network problem, run again in a moment' ;;
+  esac
+}
+
+# Why the last step failed, in a red gutter under its result line.
+print_failure_reason() {
+  [[ -n "$BFU_LAST_ERROR" ]] || return 0
+  local width=$(( BFU_W - 18 )) row hint
+  while IFS= read -r row; do
+    printf "          ${accent_red}┃${reset} ${dim}%s${reset}\n" "$row"
+  done < <(printf '%s\n' "$BFU_LAST_ERROR" | fold -s -w "$width" | sed 's/[[:space:]]*$//')
+  hint=$(_bfu_hint "$BFU_LAST_ERROR")
+  [[ -n "$hint" ]] && printf "          ${accent_red}┃${reset} ${accent_amber}→ %s${reset}\n" "$hint"
+  return 0
+}
+
+# Closing summary card: overall result, totals, one row per step with a time bar.
 print_summary() {
   local duration="$1"
   _bfu_step_close
@@ -186,33 +282,57 @@ print_summary() {
   _bfu_box_top
   _bfu_box_row "$title_plain" "$title_styled" "${duration}s" "${dim}${duration}s${reset}"
   _bfu_box_divider
-  local i name note secs
+
+  # Totals
+  local skipped=${#BFU_SKIPPED_NAMES} chips_plain chips_styled
+  if [[ "$DRY_RUN" == true ]]; then
+    chips_plain="● $(_bfu_count "$BFU_PENDING" update updates) would be installed"
+    chips_styled="${accent_amber}●${reset} $(_bfu_count "$BFU_PENDING" update updates) would be installed"
+  else
+    local fail_dot="$track"
+    (( BFU_FAILS > 0 )) && fail_dot="$accent_red"
+    chips_plain="● ${BFU_UPGRADED} upgraded   ● ${skipped} skipped   ● ${BFU_FAILS} failed"
+    chips_styled="${accent_green}●${reset} ${BFU_UPGRADED} upgraded   ${accent_cyan}●${reset} ${skipped} skipped   ${fail_dot}●${reset} ${BFU_FAILS} failed"
+  fi
+  _bfu_box_row "$chips_plain" "$chips_styled" "" ""
+  _bfu_box_divider
+
+  # One row per step: status icon, name, result, relative time bar, seconds.
+  local i name note secs max=1 icon color
+  for (( i = 1; i <= ${#BFU_STEP_TITLES}; i++ )); do
+    (( ${BFU_STEP_SECS[i]:-0} > max )) && max=${BFU_STEP_SECS[i]}
+  done
   for (( i = 1; i <= ${#BFU_STEP_TITLES}; i++ )); do
     name="${BFU_STEP_TITLES[i]}"
     note="${BFU_STEP_NOTES[i]:-done}"
     secs="${BFU_STEP_SECS[i]:-0}"
-    _bfu_box_row "${(r:14:)name}${note}" "${dim}${(r:14:)name}${reset}${note}" "${secs}s" "${dim}${secs}s${reset}"
+    case "$note" in
+      *failed*) icon="✗"; color="$accent_red" ;;
+      *skipped*|*"not installed"*|*"dry run"*|*"would"*) icon="○"; color="$accent_cyan" ;;
+      *) icon="✓"; color="$accent_green" ;;
+    esac
+    local bar_plain="$(draw_line ─ 8)" timing="${(l:3:)secs}s"
+    _bfu_box_row "${icon} ${(r:14:)name}${note}" "${color}${icon}${reset} ${dim}${(r:14:)name}${reset}${note}" \
+      "${bar_plain}  ${timing}" "$(_bfu_bar "$secs" "$max" 8)  ${dim}${timing}${reset}"
   done
   _bfu_box_bottom
 
   if [[ "$DRY_RUN" != true ]]; then
-    local fail_color="$dim"
-    (( BFU_FAILS > 0 )) && fail_color="$accent_red"
-    printf "\n  ${accent_green}%s upgraded${reset} ${dim}·${reset} ${accent_cyan}%s skipped${reset} ${dim}·${reset} ${fail_color}%s failed${reset}\n" \
-      "$BFU_UPGRADED" "${#BFU_SKIPPED_NAMES}" "$BFU_FAILS"
-    if (( ${#BFU_SKIPPED_NAMES} > 0 )); then
-      printf "  ${dim}Still running, so not upgraded: ${(j:, :)BFU_SKIPPED_NAMES}. Quit and run again to update them.${reset}\n"
+    printf "\n"
+    if (( skipped > 0 )); then
+      printf "  ${accent_cyan}○${reset} ${dim}Still running, so not upgraded: ${(j:, :)BFU_SKIPPED_NAMES}. Quit and run again to update them.${reset}\n"
     fi
-    (( BFU_FAILS > 0 )) && printf "  ${dim}Details: ${BFU_LOG}${reset}\n"
+    printf "  ${dim}Log  ${BFU_LOG/#$HOME/~}${reset}\n"
   fi
   printf "\n"
+  _bfu_title "Brew Full Update · done"
 
   # Native macOS notification
   if [[ "$DRY_RUN" != true ]]; then
     if (( BFU_FAILS > 0 )); then
       osascript -e "display notification \"${BFU_FAILS} step(s) failed. See ~/Library/Logs/brew-full-update.log\" with title \"Brew Command Center\" subtitle \"Finished with failures\"" 2>/dev/null
     else
-      osascript -e "display notification \"${BFU_UPGRADED} upgraded, ${#BFU_SKIPPED_NAMES} skipped\" with title \"Brew Command Center\" subtitle \"Update complete\"" 2>/dev/null
+      osascript -e "display notification \"${BFU_UPGRADED} upgraded, ${skipped} skipped\" with title \"Brew Command Center\" subtitle \"Update complete\"" 2>/dev/null
     fi
   fi
 }
@@ -249,6 +369,7 @@ check_system_health() {
   [[ -n "$OUTDATED_FORMULAE" ]] && f_count=$(echo "$OUTDATED_FORMULAE" | wc -l | tr -d ' ')
   [[ -n "$OUTDATED_CASKS" ]] && c_count=$(echo "$OUTDATED_CASKS" | wc -l | tr -d ' ')
   local total_outdated=$(( f_count + c_count ))
+  BFU_PENDING=$total_outdated
 
   if (( total_outdated > 0 )); then
     print_status "✓" "$accent_green" "$(_bfu_count "$total_outdated" update updates) available ${dim}($(_bfu_count "$f_count" formula formulae), $(_bfu_count "$c_count" cask casks))${reset}"
@@ -296,7 +417,7 @@ _bfu_count() {
   if (( $1 == 1 )); then printf '%s %s' "$1" "$2"; else printf '%s %s' "$1" "$3"; fi
 }
 
-# Width of the longest package name in an outdated list (capped), for aligned columns.
+# Column widths for an outdated list: longest name (capped) and longest "old → new".
 _bfu_name_width() {
   local line name max=8
   while read -r line; do
@@ -307,10 +428,21 @@ _bfu_name_width() {
   printf '%s' "$max"
 }
 
+_bfu_version_width() {
+  local line cur new max=0 w
+  while read -r line; do
+    cur=$(_bfu_current_ver "$line"); new=$(_bfu_new_ver "$line")
+    w=$(( ${#cur} + ${#new} + 3 ))
+    (( w > max )) && max=$w
+  done <<< "$1"
+  printf '%s' "$max"
+}
+
 # Print an outdated list as an aligned queue.
 _bfu_print_queue() {
   local list="$1" line name
   BFU_NAME_W=$(_bfu_name_width "$list")
+  BFU_VER_W=$(_bfu_version_width "$list")
   while read -r line; do
     name="${line%% *}"
     print_item_with_versions "$name" "$(_bfu_current_ver "$line")" "$(_bfu_new_ver "$line")"
@@ -651,7 +783,8 @@ _bfu_run() {
 }
 
 # Run a command with a spinner; if it fails, retry once.
-# Sets BFU_RUN_SECS (total seconds) and BFU_RETRIED (1 if a retry happened).
+# Sets BFU_RUN_SECS (total seconds), BFU_RETRIED (1 if a retry happened) and,
+# on failure, BFU_LAST_ERROR (Homebrew's own error line).
 _bfu_attempt() {
   local label="$1"; shift
   local start=$SECONDS rc offset
@@ -672,23 +805,13 @@ _bfu_attempt() {
   return $rc
 }
 
-# First "Error:" line the command wrote to the log after byte OFFSET, shortened to fit.
+# First "Error:" line the command wrote to the log after byte OFFSET, prefix removed.
 _bfu_error_since() {
   local line
   line=$(tail -c +"$(( $1 + 1 ))" "$BFU_LOG" | grep -m1 -E '^(Error|error):')
   line="${line#*: }"
   (( ${#line} > 240 )) && line="${line[1,239]}…"
   printf '%s' "$line"
-}
-
-# Show why the last step failed, under its ✗ line.
-print_failure_reason() {
-  [[ -n "$BFU_LAST_ERROR" ]] || return 0
-  local width=$(( BFU_W - 16 )) first=true row
-  while IFS= read -r row; do
-    if $first; then printf "            ${dim}↳ %s${reset}\n" "$row"; first=false
-    else printf "              ${dim}%s${reset}\n" "$row"; fi
-  done < <(printf '%s\n' "$BFU_LAST_ERROR" | fold -s -w "$width" | sed 's/[[:space:]]*$//')
 }
 
 # " (12s)" or " (12s, retried)" for the result line.
@@ -738,7 +861,7 @@ brew_full_update() {
   local OUTDATED_CASKS=""
   local PREFETCH_PID=""
   typeset -g SUDO_PID=""
-  typeset -g BFU_FAILS=0 BFU_UPGRADED=0 BFU_CHILD_PID="" BFU_RETRIED="" BFU_RUN_SECS=0 BFU_SPIN_INDENT="" BFU_LAST_ERROR=""
+  typeset -g BFU_FAILS=0 BFU_UPGRADED=0 BFU_PENDING=0 BFU_CHILD_PID="" BFU_RETRIED="" BFU_RUN_SECS=0 BFU_SPIN_INDENT="" BFU_LAST_ERROR=""
   typeset -g BFU_STEP=0 BFU_STEP_T0=""
   typeset -ga BFU_SKIPPED_NAMES=() BFU_STEP_TITLES=() BFU_STEP_SECS=() BFU_STEP_NOTES=()
   _bfu_init_ui
@@ -752,6 +875,8 @@ brew_full_update() {
   case "$1" in
     --dry-run|-d)
       DRY_RUN=true
+      # Dry runs wear amber instead of blue so a preview can't be mistaken for the real thing.
+      [[ -n "$accent_amber" ]] && accent_blue="$accent_amber"
       ;;
   esac
 

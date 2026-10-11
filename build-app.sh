@@ -30,7 +30,10 @@ mkdir -p "$out"; rm -rf "$app"
 osacompile -o "$app" "$tmp/launcher.applescript"
 
 # Icon + identity
-cp "$here/assets/applet.icns" "$here/assets/Assets.car" "$app/Contents/Resources/"
+cp "$here/assets/applet.icns" "$app/Contents/Resources/"
+# The stock applet ships an asset catalog with its own icon; drop it so applet.icns is used.
+rm -f "$app/Contents/Resources/Assets.car"
+plutil -remove CFBundleIconName "$app/Contents/Info.plist" 2>/dev/null || true
 plist="$app/Contents/Info.plist"
 plutil -replace CFBundleIdentifier -string "$bundle_id" "$plist"
 plutil -replace CFBundleName -string "Brew Full Update" "$plist"

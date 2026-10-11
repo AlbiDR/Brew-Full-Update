@@ -2,7 +2,7 @@
 -- brew_full_update.zsh; edit the .zsh file, not the embedded copy.
 -- Choosing "Dry Run" in the dialog previews the update without changing anything.
 set appIcon to path to resource "applet.icns"
-set dialogResult to display dialog "Run the full Homebrew update, or preview it with a dry run first?" with title "Brew Command Center" with icon appIcon buttons {"Cancel", "Dry Run", "Update"} default button "Update" cancel button "Cancel" giving up after 10
+set dialogResult to display dialog "Update everything now, or preview first?" & return & return & "Dry Run lists what would change and installs nothing. If you do nothing, Update starts in 15 seconds." with title "Brew Command Center" with icon appIcon buttons {"Cancel", "Dry Run", "Update"} default button "Update" cancel button "Cancel" giving up after 15
 set modeFlag to ""
 if (gave up of dialogResult) is false and (button returned of dialogResult) is "Dry Run" then set modeFlag to "--dry-run"
 

@@ -6,53 +6,55 @@ This is what `brew-full-update --dry-run` prints (a dry run changes nothing):
 
 ```
   ╭────────────────────────────────────────────────────────────────────────────╮
-  │ Brew Command Center                                          dry run  v9.0 │
-  │ MacBook Pro · macOS 27.2 · Homebrew 7.0.9 · Sun 11 Oct, 14:02              │
+  │ ◆ Brew Command Center                                       dry run  v10.0 │
+  │   MacBook Pro · macOS 27.2 · Homebrew 7.0.9 · 11 Oct, 14:02                │
   ╰────────────────────────────────────────────────────────────────────────────╯
 
-  ── 1 · Diagnostics ───────────────────────────────────────────────────────────
+  ── 1 · Diagnostics ──────────────────────────────────────────────────── ●●●●●●
 
     ✓  Network reachable
-    ✓  Homebrew index refreshed (1s)
+    ✓  Homebrew index refreshed (0s)
     ✓  1 update available (1 formula, 0 casks)
     ✓  No missing or deprecated packages
 
-  ── 2 · Formulae ──────────────────────────────────────────────────────────────
+  ── 2 · Formulae ─────────────────────────────────────────────────────── ●●●●●●
 
     ›  1 formula to upgrade
 
     ▸ Upgrade queue
-      ↑  supabase/tap/supabase  2.117.0 → 2.120.0
+      ↑  supabase/tap/supabase  2.117.0 → 2.120.0  minor
 
     Dry run: nothing will be installed.
 
-  ── 3 · Casks ─────────────────────────────────────────────────────────────────
+  ── 3 · Casks ────────────────────────────────────────────────────────── ●●●●●●
 
     Excluding: alfred, daisydisk, gemini, macdroid, topaz-gigapixel +3 more
 
     ✓  All applications are up to date
 
-  ── 4 · App Store ─────────────────────────────────────────────────────────────
+  ── 4 · App Store ────────────────────────────────────────────────────── ●●●●●●
 
     ✓  All App Store apps are up to date
 
-  ── 5 · Dev runtimes ──────────────────────────────────────────────────────────
+  ── 5 · Dev runtimes ─────────────────────────────────────────────────── ●●●●●●
 
     ·  Node, Python and Ruby environments would be synced
 
-  ── 6 · Cleanup ───────────────────────────────────────────────────────────────
+  ── 6 · Cleanup ──────────────────────────────────────────────────────── ●●●●●●
 
     ·  Skipped in dry run
 
   ╭────────────────────────────────────────────────────────────────────────────╮
-  │ Dry run complete · no changes made                                      4s │
+  │ Dry run complete · no changes made                                      3s │
   ├────────────────────────────────────────────────────────────────────────────┤
-  │ Diagnostics   1 update found                                            3s │
-  │ Formulae      1 would be upgraded                                       0s │
-  │ Casks         up to date                                                0s │
-  │ App Store     up to date                                                1s │
-  │ Dev runtimes  dry run                                                   0s │
-  │ Cleanup       dry run                                                   0s │
+  │ ● 1 update would be installed                                              │
+  ├────────────────────────────────────────────────────────────────────────────┤
+  │ ✓ Diagnostics   1 update found                              ━━━━━━━━    3s │
+  │ ○ Formulae      1 would be upgraded                         ────────    0s │
+  │ ✓ Casks         up to date                                  ────────    0s │
+  │ ✓ App Store     up to date                                  ────────    0s │
+  │ ○ Dev runtimes  dry run                                     ────────    0s │
+  │ ○ Cleanup       dry run                                     ────────    0s │
   ╰────────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -103,7 +105,7 @@ It only asks for your admin password (or Touch ID) when app updates are actually
 
 Before the first upgrade, the versions you have installed are written to the log, so you can see what to roll back to if an update breaks something.
 
-Output is plain text when piped to a file, or when `NO_COLOR` is set.
+Output is plain text when piped to a file, or when `NO_COLOR` is set. To keep the colours in a pager, run it with `BFU_FORCE_COLOR=1` and pipe into `less -R`.
 
 Every step's output goes to `~/Library/Logs/brew-full-update.log`, which resets once it passes 1 MB. If any step fails, the closing summary and the notification say so and point to that file.
 
@@ -132,7 +134,8 @@ brew_full_update.zsh      the script
 launcher.applescript.in   app launcher template
 build-app.sh              builds and verifies the app
 tests/run.sh              tests against a fake brew
-assets/                   app icon
+assets/                   app icon (`icon.svg` is the source)
+make-icon.sh              rebuilds assets/applet.icns from icon.svg
 ```
 
 `tests/run.sh` doesn't touch your system. `./build-app.sh` writes `build/Brew Full Update.app` and checks that the script embedded in it is identical to the source. Set `BFU_SIGN_ID` to sign with a real certificate; the default is an ad-hoc signature, which means macOS may ask for privacy approvals again after a rebuild.
@@ -140,6 +143,15 @@ assets/                   app icon
 The app saves a temporary `.command` file and opens it in Terminal, so the script runs in a non-interactive shell and never reads `~/.zshrc`.
 
 ## Changelog
+
+**10.0**
+- Redesigned output: gradient header, numbered sections with a six-dot progress rail, a progress line on every package, and dry runs drawn in amber so a preview never looks like the real thing.
+- Upgrade queues tag each update as major, minor or patch, with major updates highlighted.
+- Failures show Homebrew's own error in a red gutter, plus a suggested fix for known problems such as outdated Command Line Tools.
+- Summary card: totals, a status icon and a time bar for every step, and the log path.
+- Terminal tab title follows progress (`Brew Full Update Â· 3/6 Casks`).
+- New app icon, and a clearer Update / Dry Run dialog.
+- `BFU_FORCE_COLOR=1` keeps colours when piping.
 
 **9.1**
 - Admin access is requested only when cask upgrades are pending, so most runs no longer prompt for a password or Touch ID.
