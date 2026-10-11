@@ -1,6 +1,7 @@
 #!/bin/zsh
 # Dependency-free tests for brew_full_update.zsh. Run: tests/run.sh
 # Uses a fake `brew` on PATH, so nothing on the real system is touched.
+export LC_ALL=en_US.UTF-8
 here="${0:A:h}"
 src="$here/../brew_full_update.zsh"
 pass=0; fail=0
@@ -40,8 +41,8 @@ note=$(_bfu_excluded_note)
 BFU_EXCLUDED_CASKS=()
 
 # --- closing summary
-out=$(DRY_RUN=false BFU_FAILS=1 BFU_UPGRADED=3 BFU_SKIPPED_NAMES=(slack chrome) BFU_LOG=/x print_bottom_banner 9 2>&1)
-[[ "$out" == *"3 upgraded"*"2 skipped"*"1 failed"* && "$out" == *"slack, chrome"* && "$out" == *"FAILURE"* ]] \
+out=$(DRY_RUN=false BFU_FAILS=1 BFU_UPGRADED=3 BFU_SKIPPED_NAMES=(slack chrome) BFU_LOG=/x print_summary 9 2>&1)
+[[ "$out" == *"3 upgraded"*"2 skipped"*"1 failed"* && "$out" == *"slack, chrome"* && "$out" == *"Finished with 1 failure"* ]] \
   && ok "summary: counts, skipped names, failure banner" || bad "summary" "$out"
 
 # --- colour handling
@@ -65,6 +66,33 @@ rm -f "$flag"
 BFU_FAILS=0
 eq "attempt: output of the command lands in the log" "$( _bfu_attempt "T" echo hello-from-step; grep -c '^hello-from-step$' "$BFU_LOG")" "1"
 
+# --- box rows are exactly as wide as the box borders
+BFU_W=78
+w_top=$(_bfu_box_top | sed 's/\x1b\[[0-9;]*m//g'); w_row=$(_bfu_box_row "ab" "ab" "cd" "cd" | sed 's/\x1b\[[0-9;]*m//g')
+eq "box: row width equals border width" "${#w_row}" "${#w_top}"
+BFU_W=60; w_top=$(_bfu_box_top); w_row=$(_bfu_box_row "left" "left" "right" "right")
+eq "box: stays aligned on a narrow layout" "${#w_row}" "${#w_top}"
+BFU_W=78
+
+# --- coloured box rows render escapes, never the literal text "\033"
+out=$(reset='\033[0m' bold='\033[1m' _bfu_box_row "x" "${bold}x${reset}" "" "" )
+[[ "$out" != *'\033'* ]] && ok "box row: colour codes are interpreted" || bad "box row escapes" "$out"
+
+# --- step bookkeeping and summary rows
+BFU_STEP=0; BFU_STEP_TITLES=(); BFU_STEP_SECS=(); BFU_STEP_NOTES=(); BFU_STEP_T0=""
+print_section "Formulae" >/dev/null; _bfu_step_note "2 upgraded"
+print_section "Casks" >/dev/null; _bfu_step_note "up to date"
+out=$(DRY_RUN=false BFU_FAILS=0 BFU_UPGRADED=2 BFU_SKIPPED_NAMES=() BFU_LOG=/x print_summary 5 2>&1)
+[[ "$out" == *"Update complete"* && "$out" == *"Formulae"*"2 upgraded"* && "$out" == *"Casks"*"up to date"* ]] \
+  && ok "summary: step rows with notes" || bad "summary rows" "$out"
+eq "step titles recorded in order" "${BFU_STEP_TITLES[*]}" "Formulae Casks"
+
+# --- aligned queue
+BFU_NAME_W=$(_bfu_name_width $'a (1) < 2\nlonger-name (1) < 2')
+eq "queue: name column fits longest name" "$BFU_NAME_W" "11"
+eq "count: singular" "$(_bfu_count 1 formula formulae)" "1 formula"
+eq "count: plural"   "$(_bfu_count 3 formula formulae)" "3 formulae"
+
 # --- orchestrator, with a fake brew and no network
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 cat > "$tmp/brew" <<'B'
@@ -83,10 +111,10 @@ chmod +x "$tmp/brew" "$tmp/nc"
 run() { FAKE_NC_RC=$1 HOME="$tmp" PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" zsh -c "BFU_EXCLUDED_CASKS=(alfred); source '$src'; brew_full_update --dry-run; echo EXIT=\$?" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
 
 out=$(run 1)
-[[ "$out" == *"UPDATE ABORTED"* && "$out" == *"EXIT=1"* && "$out" != *"UPDATE COMPLETE"* ]] \
+[[ "$out" == *"Update aborted"* && "$out" == *"EXIT=1"* && "$out" != *"Update complete"* && "$out" != *"Dry run complete"* ]] \
   && ok "network down: aborts, exit 1, no COMPLETE banner" || bad "network abort" "$out"
 out=$(run 0)
-[[ "$out" == *"wget"*"1.0"*"2.0"* && "$out" == *"UPDATE COMPLETE"* && "$out" == *"EXIT=0"* ]] \
+[[ "$out" == *"wget"*"1.0"*"2.0"* && "$out" == *"Dry run complete"* && "$out" == *"EXIT=0"* ]] \
   && ok "dry run: shows versions, completes, exit 0" || bad "dry run" "$out"
 [[ "$out" == *"Excluding: alfred"* ]] && ok "dry run: exclusion note from config" || bad "exclusion note" "$out"
 [[ -f "$tmp/Library/Logs/brew-full-update.log" ]] && ok "log file created under HOME" || bad "log file" "missing"

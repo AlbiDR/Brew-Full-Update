@@ -5,65 +5,55 @@ A zsh script that updates a Mac in one go: Homebrew formulae and casks, Mac App 
 This is what `brew-full-update --dry-run` prints (a dry run changes nothing):
 
 ```
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ BREW COMMAND CENTER  v8.5  [DRY-RUN]                                         ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+  ╭────────────────────────────────────────────────────────────────────────────╮
+  │ Brew Command Center                                          dry run  v9.0 │
+  │ MacBook Pro · macOS 27.2 · Homebrew 7.0.9 · Sun 11 Oct, 14:02              │
+  ╰────────────────────────────────────────────────────────────────────────────╯
 
-  ┌──────────────────────────────────────────────────────────────────────────┐
-  │ SYSTEM INTEGRITY & DIAGNOSTICS                                           │
-  └──────────────────────────────────────────────────────────────────────────┘
-    Testing upstream internet connectivity...
-    ✓  Network connection stable
+  ── 1 · Diagnostics ───────────────────────────────────────────────────────────
 
-    Indexing registries & calculating payloads...
-    ✓  Registries indexed (1 updates identified)
+    ✓  Network reachable
+    ✓  Homebrew index refreshed (1s)
+    ✓  1 update available (1 formula, 0 casks)
+    ✓  No missing or deprecated packages
 
-    Analyzing system architecture...
-    ✓  System health optimal
+  ── 2 · Formulae ──────────────────────────────────────────────────────────────
 
-  ┌──────────────────────────────────────────────────────────────────────────┐
-  │ BINARY DEPLOYMENT                                                        │
-  └──────────────────────────────────────────────────────────────────────────┘
-    ·  Would update 1 formula
+    ›  1 formula to upgrade
 
-    UPGRADE QUEUE
-    ────────────────────────────────────────────────────────────────────────
-      ↑  supabase/tap/supabase        2.117.0 → 2.120.0
+    ▸ Upgrade queue
+      ↑  supabase/tap/supabase  2.117.0 → 2.120.0
 
-    PREVIEW (DRY-RUN)
-    ────────────────────────────────────────────────────────────────────────
-    These formulae would be upgraded. Run without --dry-run to install.
+    Dry run: nothing will be installed.
 
-  ┌──────────────────────────────────────────────────────────────────────────┐
-  │ APPLICATION (CASK) DEPLOYMENT                                            │
-  └──────────────────────────────────────────────────────────────────────────┘
-    (Excluding: alfred, daisydisk, gemini, macdroid, topaz-gigapixel +3 more)
+  ── 3 · Casks ─────────────────────────────────────────────────────────────────
 
-    ✓  All applications up-to-date
+    Excluding: alfred, daisydisk, gemini, macdroid, topaz-gigapixel +3 more
 
-  ┌──────────────────────────────────────────────────────────────────────────┐
-  │ MAC APP STORE SYNC                                                       │
-  └──────────────────────────────────────────────────────────────────────────┘
-    Checking App Store updates...
-    ✓  All App Store items up-to-date
+    ✓  All applications are up to date
 
-  ┌──────────────────────────────────────────────────────────────────────────┐
-  │ DEVELOPMENT RUNTIME SYNC                                                 │
-  └──────────────────────────────────────────────────────────────────────────┘
-    Would align development environments...
-    ·  Node environment sync would run
-    ·  Python environment sync would run
-    ·  Ruby environment sync would run
+  ── 4 · App Store ─────────────────────────────────────────────────────────────
 
-  ┌──────────────────────────────────────────────────────────────────────────┐
-  │ STORAGE OPTIMIZATION                                                     │
-  └──────────────────────────────────────────────────────────────────────────┘
-    Pruning orphaned files and caches...
-    ·  Storage cleanup skipped in dry-run mode
+    ✓  All App Store apps are up to date
 
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ SYSTEM UPDATE COMPLETE · 4s · dry run, no changes made                       ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+  ── 5 · Dev runtimes ──────────────────────────────────────────────────────────
+
+    ·  Node, Python and Ruby environments would be synced
+
+  ── 6 · Cleanup ───────────────────────────────────────────────────────────────
+
+    ·  Skipped in dry run
+
+  ╭────────────────────────────────────────────────────────────────────────────╮
+  │ Dry run complete · no changes made                                      4s │
+  ├────────────────────────────────────────────────────────────────────────────┤
+  │ Diagnostics   1 update found                                            3s │
+  │ Formulae      1 would be upgraded                                       0s │
+  │ Casks         up to date                                                0s │
+  │ App Store     up to date                                                1s │
+  │ Dev runtimes  dry run                                                   0s │
+  │ Cleanup       dry run                                                   0s │
+  ╰────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ## Install
@@ -115,7 +105,7 @@ Before the first upgrade, the versions you have installed are written to the log
 
 Output is plain text when piped to a file, or when `NO_COLOR` is set.
 
-Every step's output goes to `~/Library/Logs/brew-full-update.log`, which resets once it passes 1 MB. If any step fails, the closing banner and the notification say so and point to that file.
+Every step's output goes to `~/Library/Logs/brew-full-update.log`, which resets once it passes 1 MB. If any step fails, the closing summary and the notification say so and point to that file.
 
 ## Excluding casks
 
@@ -150,6 +140,12 @@ assets/                   app icon
 The app saves a temporary `.command` file and opens it in Terminal, so the script runs in a non-interactive shell and never reads `~/.zshrc`.
 
 ## Changelog
+
+**9.0**
+- New look: rounded header with machine info, numbered section rules, aligned upgrade queues with the new version highlighted, and per-package version changes.
+- Closing summary card: one row per step (what happened and how long it took), plus totals and any apps skipped because they were running.
+- Spinner while the Homebrew index refreshes and while cleanup runs; cleanup now reports how much space it freed.
+- Dry runs no longer show repeated "preview" blocks; each section ends with a single line.
 
 **8.5**
 - Each package line shows its version change: `[2/3] wget 1.25.0 → 1.26.0`.

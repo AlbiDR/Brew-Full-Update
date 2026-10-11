@@ -1,10 +1,12 @@
 #!/usr/bin/env zsh
 
 # ============================================================================
-# BREW FULL UPDATE - Comprehensive System Synchronization (v8.5)
+# BREW FULL UPDATE (v9.0)
+# One command to update Homebrew formulae and casks, Mac App Store apps and
+# language-runtime installs, then clean up and report what happened.
 # ============================================================================
 
-BFU_VERSION="8.5"
+BFU_VERSION="9.0"
 
 # ----------------------------------------------------------------------------
 # CONFIGURATION
@@ -22,22 +24,31 @@ BFU_VERSION="8.5"
   commander-one
 )
 
-# Layout width and colour palette are (re)computed on every run by _bfu_init_ui,
-# so piped output and NO_COLOR get plain text without affecting later runs.
+# ============================================================================
+# STYLE
+# ============================================================================
+# Layout width and colours are (re)computed on every run by _bfu_init_ui, so
+# piped output and NO_COLOR get plain text without affecting later runs.
 typeset -g BFU_W=78
 reset='' bold='' dim='' accent_blue='' accent_cyan='' accent_green='' accent_amber='' accent_red=''
 
+# Per-run step tracking, used for the closing summary.
+typeset -g BFU_STEP=0 BFU_STEP_T0=""
+typeset -ga BFU_STEP_TITLES BFU_STEP_SECS BFU_STEP_NOTES
+
 _bfu_init_ui() {
-  # Banner padding counts characters, so we need a UTF-8 locale (e.g. when launched by the app).
+  # Box padding counts characters, so a UTF-8 locale is required (the app may launch us without one).
   [[ "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == *[Uu][Tt][Ff]* ]] || export LC_CTYPE=en_US.UTF-8
+
   if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
-    reset='\033[0m';          bold='\033[1m';           dim='\033[2m'
-    accent_blue='\033[38;5;67m';   accent_cyan='\033[38;5;73m'
-    accent_green='\033[38;5;107m'; accent_amber='\033[38;5;179m'
-    accent_red='\033[38;5;167m'
+    reset='\033[0m';  bold='\033[1m';  dim='\033[38;5;244m'
+    accent_blue='\033[38;5;75m';    accent_cyan='\033[38;5;80m'
+    accent_green='\033[38;5;114m';  accent_amber='\033[38;5;179m'
+    accent_red='\033[38;5;203m'
   else
     reset='' bold='' dim='' accent_blue='' accent_cyan='' accent_green='' accent_amber='' accent_red=''
   fi
+
   # Fit the terminal when it is narrower than the default 78-column layout.
   local cols=${COLUMNS:-0}
   (( cols > 0 )) || cols=$(tput cols 2>/dev/null || echo 80)
@@ -46,98 +57,148 @@ _bfu_init_ui() {
   (( BFU_W < 50 )) && BFU_W=50
 }
 
-# Decorative elements
-line_heavy='━'
-line_light='─'
-corner_tl='┏'
-corner_tr='┓'
-corner_bl='┗'
-corner_br='┛'
-divider_v='┃'
-
 # ============================================================================
-# LAYOUT HELPERS - DETERMINISTIC GEOMETRY
+# LAYOUT PRIMITIVES
 # ============================================================================
 
+# draw_line CHAR COUNT
 draw_line() {
-  local char="$1"
-  local len="$2"
+  local char="$1" len="$2" i
   for ((i=0; i<len; i++)); do printf "%s" "$char"; done
 }
 
-calculate_main_padding() {
-  local text="$1"
-  local text_length=${#text}
-  local padding=$((BFU_W - text_length - 1))
-  [[ $padding -gt 0 ]] && printf "%${padding}s" ""
+# One row inside a box: left text, right text, padded to the box width.
+# _bfu_box_row LEFT_PLAIN LEFT_STYLED RIGHT_PLAIN RIGHT_STYLED
+_bfu_box_row() {
+  local inner=$(( BFU_W - 2 ))
+  local space=$(( inner - 2 - ${#1} - ${#3} ))
+  (( space < 1 )) && space=1
+  printf "  ${accent_blue}│${reset} %b%*s%b ${accent_blue}│${reset}\n" "$2" "$space" "" "$4"
 }
 
-calculate_section_padding() {
-  local text="$1"
-  local text_length=${#text}
-  local padding=$((BFU_W - 4 - text_length - 1))
-  [[ $padding -gt 0 ]] && printf "%${padding}s" ""
+_bfu_box_top()    { printf "  ${accent_blue}╭$(draw_line ─ $(( BFU_W - 2 )))╮${reset}\n"; }
+_bfu_box_divider(){ printf "  ${accent_blue}├$(draw_line ─ $(( BFU_W - 2 )))┤${reset}\n"; }
+_bfu_box_bottom() { printf "  ${accent_blue}╰$(draw_line ─ $(( BFU_W - 2 )))╯${reset}\n"; }
+
+# ============================================================================
+# SECTIONS & STATUS LINES
+# ============================================================================
+
+# Close out the timing of the step that is currently open.
+_bfu_step_close() {
+  [[ -n "$BFU_STEP_T0" ]] && BFU_STEP_SECS[$BFU_STEP]=$(( SECONDS - BFU_STEP_T0 ))
+  BFU_STEP_T0=""
 }
 
-# ============================================================================
-# BANNER PRINTING (CASCADING HIERARCHY)
-# ============================================================================
+# Remember a short result for the current step (shown in the closing summary).
+_bfu_step_note() {
+  BFU_STEP_NOTES[$BFU_STEP]="$1"
+}
 
+# Header banner: name and version, then machine context.
 print_top_banner() {
   local title="$1"
-  local plain_title="$title  v${BFU_VERSION}"
-  title="${title}  ${dim}v${BFU_VERSION}${reset}"
-  
+  local host macos brewv when sub max
+  host=$(scutil --get ComputerName 2>/dev/null || hostname -s)
+  macos=$(sw_vers -productVersion 2>/dev/null)
+  brewv=$(brew --version 2>/dev/null | head -1 | sed -E 's/-[0-9]+-g[0-9a-f]+$//')
+  when=$(date '+%a %-d %b, %H:%M')
+  sub="${host} · macOS ${macos} · ${brewv} · ${when}"
+  max=$(( BFU_W - 6 ))
+  (( ${#sub} > max )) && sub="${sub[1,max-1]}…"
+
+  local right_plain="v${BFU_VERSION}" right_styled="${dim}v${BFU_VERSION}${reset}"
   if [[ "$DRY_RUN" == true ]]; then
-    title="${title}  ${dim}[DRY-RUN]${reset}"
-    plain_title="${plain_title}  [DRY-RUN]"
+    right_plain="dry run  v${BFU_VERSION}"
+    right_styled="${accent_amber}dry run${reset}  ${dim}v${BFU_VERSION}${reset}"
   fi
-  
-  printf "\n${accent_blue}${corner_tl}$(draw_line "$line_heavy" "$BFU_W")${corner_tr}${reset}\n"
-  printf "${accent_blue}${divider_v}${reset} ${bold}${title}${reset}$(calculate_main_padding "$plain_title")${accent_blue}${divider_v}${reset}\n"
-  printf "${accent_blue}${corner_bl}$(draw_line "$line_heavy" "$BFU_W")${corner_br}${reset}\n"
+
+  printf "\n"
+  _bfu_box_top
+  _bfu_box_row "$title" "${bold}${title}${reset}" "$right_plain" "$right_styled"
+  _bfu_box_row "$sub" "${dim}${sub}${reset}" "" ""
+  _bfu_box_bottom
 }
 
+# Numbered section rule: "── 2 · Formulae ─────────────"
 print_section() {
-  local title="$1"
-  printf "\n  ${accent_blue}┌$(draw_line "$line_light" $((BFU_W - 4)))┐${reset}\n"
-  printf "  ${accent_blue}│${reset} ${bold}${title}${reset}$(calculate_section_padding "$title")${accent_blue}│${reset}\n"
-  printf "  ${accent_blue}└$(draw_line "$line_light" $((BFU_W - 4)))┘${reset}\n"
+  _bfu_step_close
+  BFU_STEP=$(( BFU_STEP + 1 ))
+  BFU_STEP_TITLES[$BFU_STEP]="$1"
+  BFU_STEP_T0=$SECONDS
+  local label="${BFU_STEP} · $1"
+  local fill=$(( BFU_W - ${#label} - 4 ))
+  printf "\n  ${accent_blue}──${reset} ${bold}%s${reset} ${accent_blue}%s${reset}\n\n" "$label" "$(draw_line ─ $fill)"
 }
 
 print_subsection() {
-  local title="$1"
-  printf "\n    ${bold}${title}${reset}\n"
-  printf "    ${dim}$(draw_line "$line_light" $((BFU_W - 6)))${reset}\n"
+  printf "\n    ${bold}${accent_cyan}▸${reset} ${bold}%s${reset}\n" "$1"
 }
 
-print_bottom_banner() {
-  local duration="$1"
-  local mode_text=""
-  local title_text="✓ SYSTEM"
-  local status_text="UPDATE COMPLETE"
-  local banner_color="$accent_green"
+# print_status SYMBOL COLOR MESSAGE
+print_status() {
+  printf "    ${2}${1}${reset}  ${3}\n"
+}
 
+# [1/3]  name  1.0 → 2.0
+print_action_start() {
+  printf "    ${dim}[${reset}${accent_cyan}%s${dim}/${reset}${accent_cyan}%s${dim}]${reset}  ${bold}%s${reset}  ${dim}%s${reset}\n" "$1" "$2" "$3" "$4"
+}
+
+# Aligned upgrade-queue row: name, current version, new version.
+print_item_with_versions() {
+  local name="$1" current="$2" new="$3"
+  if [[ -z "$new" ]]; then
+    printf "      ${accent_amber}↑${reset}  %-*s  ${dim}%s${reset}\n" "${BFU_NAME_W:-28}" "$name" "$current"
+  else
+    printf "      ${accent_amber}↑${reset}  %-*s  ${dim}%s${reset} → ${accent_green}%s${reset}\n" "${BFU_NAME_W:-28}" "$name" "$current" "$new"
+  fi
+}
+
+print_action_result() {
+  local action="$1" res_status="$2" symbol="" color=""
+  case "$res_status" in
+    "done") symbol="✓"; color="$accent_green" ;;
+    "skip") symbol="○"; color="$accent_cyan" ;;
+    "fail") symbol="✗"; color="$accent_red"; BFU_FAILS=$(( BFU_FAILS + 1 )) ;;
+  esac
+  printf "          ${color}${symbol} ${action}${reset}\n"
+}
+
+# Closing summary card: overall result, one row per step, total time.
+print_summary() {
+  local duration="$1"
+  _bfu_step_close
+
+  local title_plain title_styled
   if [[ "$DRY_RUN" == true ]]; then
-    title_text="SYSTEM"
-    mode_text=" · dry run, no changes made"
-  elif [[ "$BFU_FAILS" -gt 0 ]]; then
-    title_text="! SYSTEM"
-    status_text="UPDATE FINISHED WITH ${BFU_FAILS} FAILURE(S)"
-    banner_color="$accent_amber"
+    title_plain="Dry run complete · no changes made"
+    title_styled="${bold}${accent_amber}Dry run complete${reset} ${dim}· no changes made${reset}"
+  elif (( BFU_FAILS > 0 )); then
+    title_plain="! Finished with ${BFU_FAILS} failure(s)"
+    title_styled="${bold}${accent_amber}! Finished with ${BFU_FAILS} failure(s)${reset}"
+  else
+    title_plain="✓ Update complete"
+    title_styled="${bold}${accent_green}✓ Update complete${reset}"
   fi
 
-  local plain_message="${title_text} ${status_text} · ${duration}s${mode_text}"
-  local message="${title_text} ${status_text} · ${duration}s${dim}${mode_text}${reset}"
-
-  printf "\n${accent_blue}${corner_tl}$(draw_line "$line_heavy" "$BFU_W")${corner_tr}${reset}\n"
-  printf "${accent_blue}${divider_v}${reset} ${bold}${banner_color}${message}${reset}$(calculate_main_padding "$plain_message")${accent_blue}${divider_v}${reset}\n"
-  printf "${accent_blue}${corner_bl}$(draw_line "$line_heavy" "$BFU_W")${corner_br}${reset}\n"
+  printf "\n"
+  _bfu_box_top
+  _bfu_box_row "$title_plain" "$title_styled" "${duration}s" "${dim}${duration}s${reset}"
+  _bfu_box_divider
+  local i name note secs
+  for (( i = 1; i <= ${#BFU_STEP_TITLES}; i++ )); do
+    name="${BFU_STEP_TITLES[i]}"
+    note="${BFU_STEP_NOTES[i]:-done}"
+    secs="${BFU_STEP_SECS[i]:-0}"
+    _bfu_box_row "${(r:14:)name}${note}" "${dim}${(r:14:)name}${reset}${note}" "${secs}s" "${dim}${secs}s${reset}"
+  done
+  _bfu_box_bottom
 
   if [[ "$DRY_RUN" != true ]]; then
     local fail_color="$dim"
     (( BFU_FAILS > 0 )) && fail_color="$accent_red"
-    printf "  ${accent_green}%s upgraded${reset} ${dim}·${reset} ${accent_cyan}%s skipped${reset} ${dim}·${reset} ${fail_color}%s failed${reset}\n" \
+    printf "\n  ${accent_green}%s upgraded${reset} ${dim}·${reset} ${accent_cyan}%s skipped${reset} ${dim}·${reset} ${fail_color}%s failed${reset}\n" \
       "$BFU_UPGRADED" "${#BFU_SKIPPED_NAMES}" "$BFU_FAILS"
     if (( ${#BFU_SKIPPED_NAMES} > 0 )); then
       printf "  ${dim}Still running, so not upgraded: ${(j:, :)BFU_SKIPPED_NAMES}. Quit and run again to update them.${reset}\n"
@@ -146,9 +207,9 @@ print_bottom_banner() {
   fi
   printf "\n"
 
-  # Native macOS Notification Hook
+  # Native macOS notification
   if [[ "$DRY_RUN" != true ]]; then
-    if [[ "$BFU_FAILS" -gt 0 ]]; then
+    if (( BFU_FAILS > 0 )); then
       osascript -e "display notification \"${BFU_FAILS} step(s) failed. See ~/Library/Logs/brew-full-update.log\" with title \"Brew Command Center\" subtitle \"Finished with failures\"" 2>/dev/null
     else
       osascript -e "display notification \"${BFU_UPGRADED} upgraded, ${#BFU_SKIPPED_NAMES} skipped\" with title \"Brew Command Center\" subtitle \"Update complete\"" 2>/dev/null
@@ -157,117 +218,68 @@ print_bottom_banner() {
 }
 
 # ============================================================================
-# STATUS LINE HELPERS
-# ============================================================================
-
-print_status() {
-  local symbol="$1"
-  local color="$2"
-  local message="$3"
-  printf "    ${color}${symbol}${reset}  ${message}\n"
-}
-
-print_action_start() {
-  local index="$1"
-  local total="$2"
-  local name="$3"
-  local versions="$4"
-  printf "    ${dim}[${reset}${accent_cyan}%s${dim}/${reset}${accent_cyan}%s${dim}]${reset}  ${bold}%s${reset}  ${dim}%s${reset}\n" "$index" "$total" "$name" "$versions"
-}
-
-print_item_with_versions() {
-  local name="$1"
-  local current="$2"
-  local new="$3"
-  if [[ -z "$new" ]]; then
-    printf "      ${accent_amber}↑${reset}  %-28s ${dim}%s${reset}\n" "$name" "$current"
-  else
-    printf "      ${accent_amber}↑${reset}  %-28s ${dim}%s${reset} → ${accent_amber}%s${reset}\n" "$name" "$current" "$new"
-  fi
-}
-
-print_action_result() {
-  local action="$1"
-  local res_status="$2"
-  local symbol=""
-  local color=""
-  
-  case "$res_status" in
-    "done") symbol="✓"; color="$accent_green" ;;
-    "preview") symbol="→"; color="$accent_cyan" ;;
-    "skip") symbol="○"; color="$accent_cyan" ;;
-    "fail") symbol="✗"; color="$accent_red"; ((BFU_FAILS++)) ;;
-  esac
-  
-  printf "          ${color}${symbol} ${action}${reset}\n"
-}
-
-# ============================================================================
-# SYSTEM DIAGNOSTICS & ASYNC PRE-FETCH
+# 1 · DIAGNOSTICS
 # ============================================================================
 
 check_system_health() {
-  print_section "SYSTEM INTEGRITY & DIAGNOSTICS"
-  
-  # 1. Network Connection Guard
-  printf "    ${dim}Testing upstream internet connectivity...${reset}\n"
+  print_section "Diagnostics"
+
+  # Network guard
   if ! nc -zw1 1.1.1.1 443 &>/dev/null; then
-    print_status "✗" "$accent_red" "Network unreachable. Sync aborted."
+    print_status "✗" "$accent_red" "No network connection"
     return 1
   fi
-  print_status "✓" "$accent_green" "Network connection stable"
-  printf "\n"
-  
-  # 2. Registry Sync & Background Pre-Fetch
-  printf "    ${dim}Indexing registries & calculating payloads...${reset}\n"
-  
-  # FAILURE IGNORED: brew update success/failure does not stop execution
-  brew update > /dev/null 2>&1 || true
+  print_status "✓" "$accent_green" "Network reachable"
+
+  # Refresh the index with a spinner. A failure here is not fatal: cached data is used.
+  local t0=$SECONDS
+  BFU_SPIN_INDENT=4
+  if _bfu_run "Updating Homebrew index" brew update; then
+    print_status "✓" "$accent_green" "Homebrew index refreshed ${dim}($(( SECONDS - t0 ))s)${reset}"
+  else
+    print_status "!" "$accent_amber" "Could not refresh the index, using cached data"
+  fi
+  BFU_SPIN_INDENT=""
   brew analytics off > /dev/null 2>&1 || true
-  
+
   OUTDATED_FORMULAE=$(brew outdated --formula --verbose 2>/dev/null)
   OUTDATED_CASKS=$(brew outdated --cask --verbose 2>/dev/null | _bfu_filter_excluded)
-  
-  local f_count=0
-  local c_count=0
+
+  local f_count=0 c_count=0
   [[ -n "$OUTDATED_FORMULAE" ]] && f_count=$(echo "$OUTDATED_FORMULAE" | wc -l | tr -d ' ')
   [[ -n "$OUTDATED_CASKS" ]] && c_count=$(echo "$OUTDATED_CASKS" | wc -l | tr -d ' ')
-  local total_outdated=$((f_count + c_count))
-  
-  if [[ "$total_outdated" -gt 0 && "$DRY_RUN" != true ]]; then
-    (
-      local f_list=$(echo "$OUTDATED_FORMULAE" | awk '{print $1}')
-      local c_list=$(echo "$OUTDATED_CASKS" | awk '{print $1}')
-      if [[ -n "$f_list" ]]; then echo "$f_list" | xargs brew fetch --formula >/dev/null 2>&1; fi
-      if [[ -n "$c_list" ]]; then echo "$c_list" | xargs brew fetch --cask >/dev/null 2>&1; fi
-    ) &
-    PREFETCH_PID=$!
-    print_status "✓" "$accent_green" "Registries indexed ($total_outdated updates pre-fetching in background)"
-  elif [[ "$total_outdated" -gt 0 && "$DRY_RUN" == true ]]; then
-    print_status "✓" "$accent_green" "Registries indexed ($total_outdated updates identified)"
+  local total_outdated=$(( f_count + c_count ))
+
+  if (( total_outdated > 0 )); then
+    print_status "✓" "$accent_green" "$(_bfu_count "$total_outdated" update updates) available ${dim}($(_bfu_count "$f_count" formula formulae), $(_bfu_count "$c_count" cask casks))${reset}"
+    _bfu_step_note "$(_bfu_count "$total_outdated" update updates) found"
+    if [[ "$DRY_RUN" != true ]]; then
+      (
+        local f_list=$(echo "$OUTDATED_FORMULAE" | awk '{print $1}')
+        local c_list=$(echo "$OUTDATED_CASKS" | awk '{print $1}')
+        if [[ -n "$f_list" ]]; then echo "$f_list" | xargs brew fetch --formula >/dev/null 2>&1; fi
+        if [[ -n "$c_list" ]]; then echo "$c_list" | xargs brew fetch --cask >/dev/null 2>&1; fi
+      ) &
+      PREFETCH_PID=$!
+      print_status "·" "$dim" "${dim}Downloads are pre-fetching in the background${reset}"
+    fi
   else
-    print_status "✓" "$accent_green" "Registries indexed (System up-to-date)"
+    print_status "✓" "$accent_green" "Everything is up to date"
+    _bfu_step_note "up to date"
   fi
-  printf "\n"
-  
-  # 3. System Architecture Analysis
-  printf "    ${dim}Analyzing system architecture...${reset}\n"
-  
-  local missing_deps
-  local deprecated_items
-  
+
+  # Health
+  local missing_deps deprecated_items
   missing_deps=$(brew missing 2>/dev/null)
   deprecated_items=$(_bfu_deprecated)
-  
-  if [[ -z "$missing_deps" ]] && [[ -z "$deprecated_items" ]]; then
-    print_status "✓" "$accent_green" "System health optimal"
+
+  if [[ -z "$missing_deps" && -z "$deprecated_items" ]]; then
+    print_status "✓" "$accent_green" "No missing or deprecated packages"
   else
-    if [[ -n "$missing_deps" ]]; then
-      print_status "!" "$accent_amber" "Missing dependencies: $missing_deps"
-    fi
-    
+    [[ -n "$missing_deps" ]] && print_status "!" "$accent_amber" "Missing dependencies: $missing_deps"
     if [[ -n "$deprecated_items" ]]; then
-      print_subsection "DEPRECATED PACKAGES"
+      print_subsection "Deprecated packages"
+      local line
       while read -r line; do
         print_status "!" "$accent_red" "$line"
       done <<< "$deprecated_items"
@@ -276,237 +288,253 @@ check_system_health() {
 }
 
 # ============================================================================
-# FORMULA UPDATES
+# SHARED UPGRADE HELPERS
+# ============================================================================
+
+# "1 formula" / "3 formulae"
+_bfu_count() {
+  if (( $1 == 1 )); then printf '%s %s' "$1" "$2"; else printf '%s %s' "$1" "$3"; fi
+}
+
+# Width of the longest package name in an outdated list (capped), for aligned columns.
+_bfu_name_width() {
+  local line name max=8
+  while read -r line; do
+    name="${line%% *}"
+    (( ${#name} > max )) && max=${#name}
+  done <<< "$1"
+  (( max > 34 )) && max=34
+  printf '%s' "$max"
+}
+
+# Print an outdated list as an aligned queue.
+_bfu_print_queue() {
+  local list="$1" line name
+  BFU_NAME_W=$(_bfu_name_width "$list")
+  while read -r line; do
+    name="${line%% *}"
+    print_item_with_versions "$name" "$(_bfu_current_ver "$line")" "$(_bfu_new_ver "$line")"
+  done <<< "$list"
+}
+
+# Wait for the background pre-fetch started during diagnostics, if any.
+_bfu_wait_prefetch() {
+  [[ -n "$PREFETCH_PID" ]] || return 0
+  printf "    ${dim}Waiting for downloads to finish...${reset}\n"
+  wait "$PREFETCH_PID" 2>/dev/null
+  PREFETCH_PID=""
+}
+
+# ============================================================================
+# 2 · FORMULAE
 # ============================================================================
 
 update_formulae() {
-  print_section "BINARY DEPLOYMENT"
-  
+  print_section "Formulae"
+
   if [[ -z "$OUTDATED_FORMULAE" ]]; then
-    print_status "✓" "$accent_green" "All binaries up-to-date"
+    print_status "✓" "$accent_green" "All formulae are up to date"
+    _bfu_step_note "up to date"
     return
   fi
-  
+
   local count=$(echo "$OUTDATED_FORMULAE" | wc -l | tr -d ' ')
-  
+  print_status "›" "$accent_cyan" "$(_bfu_count "$count" formula formulae) to upgrade"
+
+  print_subsection "Upgrade queue"
+  _bfu_print_queue "$OUTDATED_FORMULAE"
+
   if [[ "$DRY_RUN" == true ]]; then
-    print_status "·" "$accent_cyan" "Would update ${bold}${count}${reset}${accent_cyan} formula${reset}"
-  else
-    print_status "›" "$accent_cyan" "Found ${bold}${count}${reset}${accent_cyan} formula to update${reset}"
+    printf "\n    ${dim}Dry run: nothing will be installed.${reset}\n"
+    _bfu_step_note "$count would be upgraded"
+    return
   fi
-  
-  print_subsection "UPGRADE QUEUE"
+
+  print_subsection "Installing"
+  _bfu_wait_prefetch
+
+  local i=1 ok=0 bad=0 line pkg_name
   while read -r line; do
-    local pkg_name=$(echo "$line" | awk '{print $1}')
-    local current_ver=$(_bfu_current_ver "$line")
-    local new_ver=$(_bfu_new_ver "$line")
-    print_item_with_versions "$pkg_name" "$current_ver" "$new_ver"
-  done <<< "$OUTDATED_FORMULAE"
-  
-  if [[ "$DRY_RUN" == true ]]; then
-    print_subsection "PREVIEW (DRY-RUN)"
-    printf "    ${dim}These formulae would be upgraded. Run without --dry-run to install.${reset}\n"
-  else
-    print_subsection "INSTALLATION PROGRESS"
-    
-    if [[ -n "$PREFETCH_PID" ]]; then
-      printf "    ${dim}Waiting for background pre-fetch to complete...${reset}\n"
-      wait $PREFETCH_PID 2>/dev/null
-      PREFETCH_PID=""
-      printf "    ${accent_green}✓${reset}  ${dim}Payloads ready${reset}\n\n"
+    pkg_name="${line%% *}"
+    print_action_start "$i" "$count" "$pkg_name" "$(_bfu_current_ver "$line") → $(_bfu_new_ver "$line")"
+
+    if _bfu_attempt "Installing" brew upgrade --formula "$pkg_name"; then
+      BFU_UPGRADED=$(( BFU_UPGRADED + 1 )); ok=$(( ok + 1 ))
+      print_action_result "Installed and verified$(_bfu_attempt_note)" "done"
+    else
+      bad=$(( bad + 1 ))
+      print_action_result "Installation failed$(_bfu_attempt_note)" "fail"
     fi
-    
-    local i=1
-    while read -r line; do
-      local pkg_name=$(echo "$line" | awk '{print $1}')
-      print_action_start "$i" "$count" "$pkg_name" "$(_bfu_current_ver "$line") → $(_bfu_new_ver "$line")"
-      
-      if _bfu_attempt "Installing" brew upgrade --formula "$pkg_name"; then
-        BFU_UPGRADED=$((BFU_UPGRADED + 1))
-        print_action_result "Installed and verified$(_bfu_attempt_note)" "done"
-      else
-        print_action_result "Installation failed$(_bfu_attempt_note)" "fail"
-      fi
-      printf "\n"
-      
-      ((i++))
-    done <<< "$OUTDATED_FORMULAE"
-  fi
+    i=$(( i + 1 ))
+  done <<< "$OUTDATED_FORMULAE"
+
+  local note="${ok} upgraded"
+  (( bad > 0 )) && note+=" · ${bad} failed"
+  _bfu_step_note "$note"
 }
 
 # ============================================================================
-# CASK UPDATES
+# 3 · CASKS
 # ============================================================================
 
 update_casks() {
-  print_section "APPLICATION (CASK) DEPLOYMENT"
-  
+  print_section "Casks"
+  printf "    ${dim}$(_bfu_excluded_note)${reset}\n\n"
+
   if [[ -z "$OUTDATED_CASKS" ]]; then
-    printf "    ${dim}($(_bfu_excluded_note))${reset}\n\n"
-    print_status "✓" "$accent_green" "All applications up-to-date"
+    print_status "✓" "$accent_green" "All applications are up to date"
+    _bfu_step_note "up to date"
     return
   fi
-  
+
   local count=$(echo "$OUTDATED_CASKS" | wc -l | tr -d ' ')
-  
+  print_status "›" "$accent_cyan" "$(_bfu_count "$count" application applications) to upgrade"
+
+  print_subsection "Upgrade queue"
+  _bfu_print_queue "$OUTDATED_CASKS"
+
   if [[ "$DRY_RUN" == true ]]; then
-    print_status "·" "$accent_cyan" "Would update ${bold}${count}${reset}${accent_cyan} application${reset}"
-    printf "    ${dim}($(_bfu_excluded_note))${reset}\n"
-  else
-    print_status "›" "$accent_cyan" "Found ${bold}${count}${reset}${accent_cyan} application to update${reset}"
-    printf "    ${dim}($(_bfu_excluded_note))${reset}\n"
+    printf "\n    ${dim}Dry run: nothing will be installed.${reset}\n"
+    _bfu_step_note "$count would be upgraded"
+    return
   fi
-  
-  print_subsection "PENDING UPGRADES"
+
+  print_subsection "Installing"
+  _bfu_wait_prefetch
+
+  local j=1 ok=0 bad=0 skipped=0 line cask_name
   while read -r line; do
-    local cask_name=$(echo "$line" | awk '{print $1}')
-    local current_ver=$(_bfu_current_ver "$line")
-    local new_ver=$(_bfu_new_ver "$line")
-    print_item_with_versions "$cask_name" "$current_ver" "$new_ver"
-  done <<< "$OUTDATED_CASKS"
-  
-  if [[ "$DRY_RUN" == true ]]; then
-    print_subsection "PREVIEW (DRY-RUN)"
-    printf "    ${dim}These applications would be upgraded. Run without --dry-run to install.${reset}\n"
-  else
-    print_subsection "DEPLOYMENT PROGRESS"
-    
-    if [[ -n "$PREFETCH_PID" ]]; then
-      printf "    ${dim}Waiting for background pre-fetch to complete...${reset}\n"
-      wait $PREFETCH_PID 2>/dev/null
-      PREFETCH_PID=""
-      printf "    ${accent_green}✓${reset}  ${dim}Payloads ready${reset}\n\n"
-    fi
-    
-    local j=1
-    while read -r line; do
-      local cask_name=$(echo "$line" | awk '{print $1}')
-      print_action_start "$j" "$count" "$cask_name" "$(_bfu_current_ver "$line") → $(_bfu_new_ver "$line")"
-      
-      if _bfu_cask_running "$cask_name"; then
-        BFU_SKIPPED_NAMES+=("$cask_name")
-        print_action_result "Application running (skipped)" "skip"
+    cask_name="${line%% *}"
+    print_action_start "$j" "$count" "$cask_name" "$(_bfu_current_ver "$line") → $(_bfu_new_ver "$line")"
+
+    if _bfu_cask_running "$cask_name"; then
+      BFU_SKIPPED_NAMES+=("$cask_name"); skipped=$(( skipped + 1 ))
+      print_action_result "Application running (skipped)" "skip"
+    else
+      if _bfu_attempt "Deploying" brew upgrade --cask --force "$cask_name"; then
+        BFU_UPGRADED=$(( BFU_UPGRADED + 1 )); ok=$(( ok + 1 ))
+        print_action_result "Deployed and verified$(_bfu_attempt_note)" "done"
       else
-        if _bfu_attempt "Deploying" brew upgrade --cask --force "$cask_name"; then
-          BFU_UPGRADED=$((BFU_UPGRADED + 1))
-          print_action_result "Deployed and verified$(_bfu_attempt_note)" "done"
-        else
-          print_action_result "Deployment failed$(_bfu_attempt_note)" "fail"
-        fi
+        bad=$(( bad + 1 ))
+        print_action_result "Deployment failed$(_bfu_attempt_note)" "fail"
       fi
-      printf "\n"
-      
-      ((j++))
-    done <<< "$OUTDATED_CASKS"
-  fi
+    fi
+    j=$(( j + 1 ))
+  done <<< "$OUTDATED_CASKS"
+
+  local note="${ok} upgraded"
+  (( skipped > 0 )) && note+=" · ${skipped} skipped"
+  (( bad > 0 )) && note+=" · ${bad} failed"
+  _bfu_step_note "$note"
 }
 
 # ============================================================================
-# MAC APP STORE SYNC
+# 4 · APP STORE
 # ============================================================================
 
 update_app_store() {
-  print_section "MAC APP STORE SYNC"
-  printf "    ${dim}Checking App Store updates...${reset}\n"
-  
+  print_section "App Store"
+
   if ! command -v mas &> /dev/null; then
-    print_status "!" "$accent_amber" "mas-cli not installed (skipped)"
+    print_status "!" "$accent_amber" "mas is not installed (skipped)"
+    _bfu_step_note "mas not installed"
     return
   fi
-  
+
   export MAS_NO_AUTO_INDEX=1
-  
+
   local mas_out
   mas_out=$(mas outdated 2>/dev/null)
-  
+
   if [[ -z "$mas_out" ]]; then
-    print_status "✓" "$accent_green" "All App Store items up-to-date"
+    print_status "✓" "$accent_green" "All App Store apps are up to date"
+    _bfu_step_note "up to date"
     return
   fi
-  
-  print_subsection "PENDING UPDATES"
+
+  local n=$(echo "$mas_out" | wc -l | tr -d ' ')
+  print_status "›" "$accent_cyan" "$(_bfu_count "$n" update updates) available"
+  print_subsection "Pending"
+  local line
   while read -r line; do
     printf "      ${accent_amber}↑${reset}  %s\n" "$line"
   done <<< "$mas_out"
-  
+
   if [[ "$DRY_RUN" == true ]]; then
-    print_subsection "PREVIEW (DRY-RUN)"
-    printf "    ${dim}These App Store items would be updated. Run without --dry-run to install.${reset}\n"
+    printf "\n    ${dim}Dry run: nothing will be installed.${reset}\n"
+    _bfu_step_note "$n would be updated"
+    return
+  fi
+
+  print_subsection "Updating"
+  if _bfu_attempt "Updating" mas upgrade; then
+    print_action_result "App Store synchronized$(_bfu_attempt_note)" "done"
+    _bfu_step_note "$n updated"
   else
-    print_subsection "SYNCHRONIZATION"
-    
-    if _bfu_attempt "Updating" mas upgrade; then
-      print_action_result "App Store synchronized$(_bfu_attempt_note)" "done"
-    else
-      print_action_result "Sync failed (manual sign-in required)$(_bfu_attempt_note)" "fail"
-    fi
+    print_action_result "Sync failed, sign in to the App Store and retry$(_bfu_attempt_note)" "fail"
+    _bfu_step_note "failed"
   fi
 }
 
 # ============================================================================
-# DEVELOPMENT ENVIRONMENT SYNC
+# 5 · DEV RUNTIMES
 # ============================================================================
 
 sync_dev_environments() {
-  print_section "DEVELOPMENT RUNTIME SYNC"
-  
+  print_section "Dev runtimes"
+
   if [[ "$DRY_RUN" == true ]]; then
-    printf "    ${dim}Would align development environments...${reset}\n"
-    print_status "·" "$accent_cyan" "Node environment sync would run"
-    print_status "·" "$accent_cyan" "Python environment sync would run"
-    print_status "·" "$accent_cyan" "Ruby environment sync would run"
-  else
-    printf "    ${dim}Aligning development environments...${reset}\n"
-    
-    _bfu_log "brew nodenv-sync"
-    if brew nodenv-sync >> "$BFU_LOG" 2>&1; then
-      print_status "✓" "$accent_green" "Node environment synchronized"
-    else
-      print_status "○" "$accent_cyan" "Node environment (skipped)"
-    fi
-    
-    _bfu_log "brew pyenv-sync"
-    if brew pyenv-sync >> "$BFU_LOG" 2>&1; then
-      print_status "✓" "$accent_green" "Python environment synchronized"
-    else
-      print_status "○" "$accent_cyan" "Python environment (skipped)"
-    fi
-    
-    _bfu_log "brew rbenv-sync"
-    if brew rbenv-sync >> "$BFU_LOG" 2>&1; then
-      print_status "✓" "$accent_green" "Ruby environment synchronized"
-    else
-      print_status "○" "$accent_cyan" "Ruby environment (skipped)"
-    fi
+    print_status "·" "$dim" "${dim}Node, Python and Ruby environments would be synced${reset}"
+    _bfu_step_note "dry run"
+    return
   fi
+
+  local tool label note=""
+  for tool label in nodenv Node pyenv Python rbenv Ruby; do
+    _bfu_log "brew ${tool}-sync"
+    if brew "${tool}-sync" >> "$BFU_LOG" 2>&1; then
+      print_status "✓" "$accent_green" "$label synced"
+      note+="${note:+ · }${label} ✓"
+    else
+      print_status "○" "$accent_cyan" "${label} skipped ${dim}(${tool} not set up)${reset}"
+      note+="${note:+ · }${label} ○"
+    fi
+  done
+  _bfu_step_note "$note"
 }
 
 # ============================================================================
-# STORAGE OPTIMIZATION
+# 6 · CLEANUP
 # ============================================================================
 
 optimize_storage() {
-  print_section "STORAGE OPTIMIZATION"
-  printf "    ${dim}Pruning orphaned files and caches...${reset}\n"
-  
+  print_section "Cleanup"
+
   if [[ "$DRY_RUN" == true ]]; then
-    print_status "·" "$accent_cyan" "Storage cleanup skipped in dry-run mode"
+    print_status "·" "$dim" "${dim}Skipped in dry run${reset}"
+    _bfu_step_note "dry run"
+    return
+  fi
+
+  _bfu_log "brew autoremove"
+  BFU_SPIN_INDENT=4
+  _bfu_run "Removing unused dependencies" brew autoremove
+
+  # Run cleanup through the log, then read what it reported.
+  local offset
+  offset=$(stat -f %z "$BFU_LOG")
+  _bfu_log "brew cleanup --prune=7"
+  _bfu_run "Clearing old downloads and versions" brew cleanup --prune=7
+  BFU_SPIN_INDENT=""
+
+  local freed
+  freed=$(tail -c +"$(( offset + 1 ))" "$BFU_LOG" | sed -nE 's/.*freed approximately ([^ ]+).*/\1/p' | head -1)
+  if [[ -n "$freed" ]]; then
+    print_status "✓" "$accent_green" "Freed ${bold}${freed}${reset}"
+    _bfu_step_note "freed ${freed}"
   else
-    _bfu_log "brew autoremove"
-    brew autoremove >> "$BFU_LOG" 2>&1
-    
-    local clean_output
-    _bfu_log "brew cleanup --prune=7"
-    clean_output=$(brew cleanup --prune=7 2>>"$BFU_LOG" | tee -a "$BFU_LOG" | grep "freed")
-    
-    local clean_val
-    if [[ -n "$clean_output" ]]; then
-      clean_val=$(echo "$clean_output" | sed "s/==> //")
-    else
-      clean_val="Storage already optimized"
-    fi
-    
-    print_status "✓" "$accent_green" "$clean_val"
+    print_status "✓" "$accent_green" "Already tidy"
+    _bfu_step_note "already tidy"
   fi
 }
 
@@ -598,10 +626,10 @@ _bfu_run() {
   "$@" < /dev/null >> "$BFU_LOG" 2>&1 &
   BFU_CHILD_PID=$!
   if [[ -t 1 ]]; then
-    local frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) n=1 t0=$SECONDS
+    local frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) n=1 t0=$SECONDS indent="${BFU_SPIN_INDENT:-10}"
     printf '\033[?25l'
     while kill -0 "$BFU_CHILD_PID" 2>/dev/null; do
-      printf "\r          ${accent_cyan}%s${reset} ${dim}%s... %ss${reset}\033[K" "${frames[n]}" "$label" "$((SECONDS - t0))"
+      printf "\r%*s${accent_cyan}%s${reset} ${dim}%s... %ss${reset}\033[K" "$indent" "" "${frames[n]}" "$label" "$((SECONDS - t0))"
       n=$(( n % ${#frames} + 1 ))
       sleep 0.1
     done
@@ -631,7 +659,7 @@ _bfu_attempt() {
   return $rc
 }
 
-# " (12s)" or " (12s, after retry)" for the result line.
+# " (12s)" or " (12s, retried)" for the result line.
 _bfu_attempt_note() {
   if [[ -n "$BFU_RETRIED" ]]; then
     printf ' (%ss, retried)' "$BFU_RUN_SECS"
@@ -658,31 +686,31 @@ _bfu_cleanup() {
 }
 
 # ============================================================================
-# MAIN ORCHESTRATION
+# MAIN
 # ============================================================================
 
 brew_full_update() {
   setopt localoptions no_monitor localtraps
-  
-  # 1. BREW EXISTENCE CHECK
+
   if ! command -v brew &> /dev/null; then
-    printf "${accent_red}Error: Homebrew not found. Install at https://brew.sh${reset}\n"
+    printf "Error: Homebrew not found. Install at https://brew.sh\n"
     return 1
   fi
-  
-  # 4. BACKGROUND SUDO KEEPALIVE TRAP
-  # Register trap to kill keepalive process on script exit or interrupt
+
+  # Stop the sudo keepalive and any running step on exit or interrupt.
   trap '_bfu_cleanup' EXIT
   trap '_bfu_cleanup; printf "\n"; return 130' INT TERM
-  
+
   local DRY_RUN=false
   local OUTDATED_FORMULAE=""
   local OUTDATED_CASKS=""
   local PREFETCH_PID=""
   typeset -g SUDO_PID=""
-  typeset -g BFU_FAILS=0 BFU_UPGRADED=0 BFU_CHILD_PID="" BFU_RETRIED="" BFU_RUN_SECS=0
-  typeset -ga BFU_SKIPPED_NAMES=()
+  typeset -g BFU_FAILS=0 BFU_UPGRADED=0 BFU_CHILD_PID="" BFU_RETRIED="" BFU_RUN_SECS=0 BFU_SPIN_INDENT=""
+  typeset -g BFU_STEP=0 BFU_STEP_T0=""
+  typeset -ga BFU_SKIPPED_NAMES=() BFU_STEP_TITLES=() BFU_STEP_SECS=() BFU_STEP_NOTES=()
   _bfu_init_ui
+
   typeset -g BFU_LOG="$HOME/Library/Logs/brew-full-update.log"
   mkdir -p "${BFU_LOG:h}"
   # Keep the log bounded: start fresh once it passes 1 MB.
@@ -695,46 +723,37 @@ brew_full_update() {
       ;;
   esac
 
-  # 3. SUDO VALIDATION & KEEPALIVE
+  local global_start=$SECONDS
+
+  print_top_banner "Brew Command Center"
+
+  # Admin rights: some cask installers need them. Skipped for dry runs.
   if [[ "$DRY_RUN" != true ]]; then
-    printf "\n  ${accent_cyan}Admin privileges may be required for Application deployments.${reset}\n"
-    printf "  ${dim}Validating sudo session...${reset}\n"
-    
-    # Handle sudo failure: abort if authentication is unsuccessful
+    printf "\n  ${accent_cyan}›${reset} Admin password needed for some app installers\n"
     if ! sudo -v; then
       print_status "✗" "$accent_red" "Admin authentication failed. Aborting."
       return 1
     fi
-    
-    # Start background keepalive
+    # Keep the sudo session alive until we are done.
     while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
     SUDO_PID=$!
   fi
 
-  local global_start
-  global_start=$(date +%s)
-  
-  print_top_banner "BREW COMMAND CENTER"
-  
   if ! check_system_health; then
-    printf "\n${accent_red}  UPDATE ABORTED: Please check your network connection.${reset}\n\n"
+    printf "\n  ${accent_red}✗ Update aborted${reset} ${dim}· check your network connection${reset}\n\n"
     return 1
   fi
 
   if [[ "$DRY_RUN" != true && ( -n "$OUTDATED_FORMULAE" || -n "$OUTDATED_CASKS" ) ]]; then
     _bfu_snapshot
-    printf "\n    ${dim}Installed versions saved to the log (rollback reference)${reset}\n"
+    print_status "·" "$dim" "${dim}Installed versions saved to the log (rollback reference)${reset}"
   fi
-  
+
   update_formulae
   update_casks
   update_app_store
   sync_dev_environments
   optimize_storage
-  
-  local global_end
-  global_end=$(date +%s)
-  local total_time=$((global_end - global_start))
-  
-  print_bottom_banner "$total_time"
+
+  print_summary "$(( SECONDS - global_start ))"
 }
