@@ -51,6 +51,12 @@ eq "NO_COLOR: no escape codes" "$out" "0"
 out=$(zsh -c "source '$src'; _bfu_init_ui; print_status '✓' \"\$accent_green\" hi" | LC_ALL=C grep -c $'\033' )
 eq "piped output: no escape codes" "$out" "0"
 
+# --- long failure reasons wrap instead of being cut off
+BFU_W=50; BFU_LAST_ERROR="Your Command Line Tools do not support this version of macOS and must be updated before building"
+out=$(print_failure_reason); rows=$(print "$out" | wc -l | tr -d ' ')
+[[ "$rows" -ge 3 && "$out" == *"building"* ]] && ok "failure reason: wraps long text, nothing lost" || bad "wrap" "$out"
+BFU_W=78; BFU_LAST_ERROR=""
+
 # --- spinner/retry helper (non-TTY, so no spinner output)
 BFU_LOG=$(mktemp); BFU_RETRIED=""; BFU_RUN_SECS=0
 _bfu_attempt "T" true; rc=$?
@@ -63,6 +69,11 @@ _bfu_attempt "T" flaky >/dev/null; rc=$?
 eq "attempt: fails then succeeds on retry" "$rc/$BFU_RETRIED" "0/1"
 eq "attempt note: retried" "$(_bfu_attempt_note | tr -d ' ' | sed 's/[0-9]*s/Ns/')" "(Ns,retried)"
 rm -f "$flag"
+_bfu_attempt "T" sh -c 'echo "Error: Your CLT does not support macOS 27." >&2; echo "more noise" >&2; exit 1' >/dev/null
+eq "failure reason: first Error line, prefix removed" "$BFU_LAST_ERROR" "Your CLT does not support macOS 27."
+out=$(BFU_LAST_ERROR="Error: boom" print_failure_reason)
+[[ "$out" == *"↳ Error: boom"* ]] && ok "failure reason: printed under the result" || bad "print_failure_reason" "$out"
+_bfu_attempt "T" true; eq "failure reason: cleared after a success" "$BFU_LAST_ERROR" ""
 BFU_FAILS=0
 eq "attempt: output of the command lands in the log" "$( _bfu_attempt "T" echo hello-from-step; grep -c '^hello-from-step$' "$BFU_LOG")" "1"
 
@@ -92,6 +103,13 @@ BFU_NAME_W=$(_bfu_name_width $'a (1) < 2\nlonger-name (1) < 2')
 eq "queue: name column fits longest name" "$BFU_NAME_W" "11"
 eq "count: singular" "$(_bfu_count 1 formula formulae)" "1 formula"
 eq "count: plural"   "$(_bfu_count 3 formula formulae)" "3 formulae"
+
+# --- casks are skipped, not attempted, when admin authentication failed
+BFU_STEP=0; BFU_STEP_TITLES=(); BFU_STEP_NOTES=(); BFU_STEP_SECS=(); BFU_STEP_T0=""
+called=$(mktemp -u); brew() { touch "$called"; }
+out=$(DRY_RUN=false ADMIN_OK=false OUTDATED_CASKS="raycast (1) != 2" BFU_LOG=/dev/null update_casks 2>&1)
+[[ "$out" == *"no admin access"* && ! -e "$called" ]] && ok "casks: skipped without admin access, brew not run" || bad "admin skip" "$out"
+unset -f brew; rm -f "$called"
 
 # --- orchestrator, with a fake brew and no network
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT

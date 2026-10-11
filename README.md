@@ -99,7 +99,7 @@ The app asks Update, Dry Run or Cancel when you open it, and picks Update after 
 5. `brew nodenv-sync`, `pyenv-sync`, `rbenv-sync`.
 6. `brew autoremove` and `brew cleanup --prune=7`, so downloads and old versions stick around for a week.
 
-A real run asks for your admin password once at the start, since some cask installers need it, and keeps it alive until the script finishes. A dry run doesn't ask.
+It only asks for your admin password (or Touch ID) when app updates are actually pending, since cask installers can need it, and keeps the session alive until the script finishes. Runs with no app updates, and dry runs, never prompt.
 
 Before the first upgrade, the versions you have installed are written to the log, so you can see what to roll back to if an update breaks something.
 
@@ -140,6 +140,11 @@ assets/                   app icon
 The app saves a temporary `.command` file and opens it in Terminal, so the script runs in a non-interactive shell and never reads `~/.zshrc`.
 
 ## Changelog
+
+**9.1**
+- Admin access is requested only when cask upgrades are pending, so most runs no longer prompt for a password or Touch ID.
+- A failed step now shows Homebrew's own error message under the ✗ line, wrapped to fit.
+- No stray `[1] + terminated` job message at the end of a run in an interactive shell.
 
 **9.0**
 - New look: rounded header with machine info, numbered section rules, aligned upgrade queues with the new version highlighted, and per-package version changes.

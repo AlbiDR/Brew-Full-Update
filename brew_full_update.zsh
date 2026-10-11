@@ -1,12 +1,12 @@
 #!/usr/bin/env zsh
 
 # ============================================================================
-# BREW FULL UPDATE (v9.0)
+# BREW FULL UPDATE (v9.1)
 # One command to update Homebrew formulae and casks, Mac App Store apps and
 # language-runtime installs, then clean up and report what happened.
 # ============================================================================
 
-BFU_VERSION="9.0"
+BFU_VERSION="9.1"
 
 # ----------------------------------------------------------------------------
 # CONFIGURATION
@@ -364,6 +364,7 @@ update_formulae() {
     else
       bad=$(( bad + 1 ))
       print_action_result "Installation failed$(_bfu_attempt_note)" "fail"
+      print_failure_reason
     fi
     i=$(( i + 1 ))
   done <<< "$OUTDATED_FORMULAE"
@@ -399,6 +400,12 @@ update_casks() {
     return
   fi
 
+  if [[ "${ADMIN_OK:-true}" == false ]]; then
+    printf "\n    ${dim}Skipped: no admin access.${reset}\n"
+    _bfu_step_note "skipped, no admin access"
+    return
+  fi
+
   print_subsection "Installing"
   _bfu_wait_prefetch
 
@@ -417,6 +424,7 @@ update_casks() {
       else
         bad=$(( bad + 1 ))
         print_action_result "Deployment failed$(_bfu_attempt_note)" "fail"
+        print_failure_reason
       fi
     fi
     j=$(( j + 1 ))
@@ -472,6 +480,7 @@ update_app_store() {
     _bfu_step_note "$n updated"
   else
     print_action_result "Sync failed, sign in to the App Store and retry$(_bfu_attempt_note)" "fail"
+    print_failure_reason
     _bfu_step_note "failed"
   fi
 }
@@ -645,18 +654,41 @@ _bfu_run() {
 # Sets BFU_RUN_SECS (total seconds) and BFU_RETRIED (1 if a retry happened).
 _bfu_attempt() {
   local label="$1"; shift
-  local start=$SECONDS rc
+  local start=$SECONDS rc offset
   BFU_RETRIED=""
+  BFU_LAST_ERROR=""
   _bfu_log "$*"
+  offset=$(stat -f %z "$BFU_LOG")
   _bfu_run "$label" "$@"; rc=$?
   if (( rc != 0 )); then
     BFU_RETRIED=1
     _bfu_log "FAILED (exit $rc), retrying once: $*"
     printf "          ${accent_amber}↻ Failed, retrying once${reset}\n"
+    offset=$(stat -f %z "$BFU_LOG")
     _bfu_run "$label (retry)" "$@"; rc=$?
   fi
   BFU_RUN_SECS=$(( SECONDS - start ))
+  (( rc != 0 )) && BFU_LAST_ERROR=$(_bfu_error_since "$offset")
   return $rc
+}
+
+# First "Error:" line the command wrote to the log after byte OFFSET, shortened to fit.
+_bfu_error_since() {
+  local line
+  line=$(tail -c +"$(( $1 + 1 ))" "$BFU_LOG" | grep -m1 -E '^(Error|error):')
+  line="${line#*: }"
+  (( ${#line} > 240 )) && line="${line[1,239]}…"
+  printf '%s' "$line"
+}
+
+# Show why the last step failed, under its ✗ line.
+print_failure_reason() {
+  [[ -n "$BFU_LAST_ERROR" ]] || return 0
+  local width=$(( BFU_W - 16 )) first=true row
+  while IFS= read -r row; do
+    if $first; then printf "            ${dim}↳ %s${reset}\n" "$row"; first=false
+    else printf "              ${dim}%s${reset}\n" "$row"; fi
+  done < <(printf '%s\n' "$BFU_LAST_ERROR" | fold -s -w "$width" | sed 's/[[:space:]]*$//')
 }
 
 # " (12s)" or " (12s, retried)" for the result line.
@@ -706,7 +738,7 @@ brew_full_update() {
   local OUTDATED_CASKS=""
   local PREFETCH_PID=""
   typeset -g SUDO_PID=""
-  typeset -g BFU_FAILS=0 BFU_UPGRADED=0 BFU_CHILD_PID="" BFU_RETRIED="" BFU_RUN_SECS=0 BFU_SPIN_INDENT=""
+  typeset -g BFU_FAILS=0 BFU_UPGRADED=0 BFU_CHILD_PID="" BFU_RETRIED="" BFU_RUN_SECS=0 BFU_SPIN_INDENT="" BFU_LAST_ERROR=""
   typeset -g BFU_STEP=0 BFU_STEP_T0=""
   typeset -ga BFU_SKIPPED_NAMES=() BFU_STEP_TITLES=() BFU_STEP_SECS=() BFU_STEP_NOTES=()
   _bfu_init_ui
@@ -727,18 +759,6 @@ brew_full_update() {
 
   print_top_banner "Brew Command Center"
 
-  # Admin rights: some cask installers need them. Skipped for dry runs.
-  if [[ "$DRY_RUN" != true ]]; then
-    printf "\n  ${accent_cyan}›${reset} Admin password needed for some app installers\n"
-    if ! sudo -v; then
-      print_status "✗" "$accent_red" "Admin authentication failed. Aborting."
-      return 1
-    fi
-    # Keep the sudo session alive until we are done.
-    while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
-    SUDO_PID=$!
-  fi
-
   if ! check_system_health; then
     printf "\n  ${accent_red}✗ Update aborted${reset} ${dim}· check your network connection${reset}\n\n"
     return 1
@@ -747,6 +767,21 @@ brew_full_update() {
   if [[ "$DRY_RUN" != true && ( -n "$OUTDATED_FORMULAE" || -n "$OUTDATED_CASKS" ) ]]; then
     _bfu_snapshot
     print_status "·" "$dim" "${dim}Installed versions saved to the log (rollback reference)${reset}"
+  fi
+
+  # Admin rights are only requested when app (cask) installers will actually run,
+  # so most runs never prompt for a password or Touch ID.
+  local ADMIN_OK=true
+  if [[ "$DRY_RUN" != true && -n "$OUTDATED_CASKS" ]]; then
+    print_status "›" "$accent_cyan" "Admin access needed to install app updates"
+    if sudo -v; then
+      # Keep the sudo session alive until we are done (&! keeps it out of the job table).
+      while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &!
+      SUDO_PID=$!
+    else
+      ADMIN_OK=false
+      print_status "!" "$accent_amber" "Admin authentication failed, app updates will be skipped"
+    fi
   fi
 
   update_formulae
