@@ -1,0 +1,20 @@
+-- Brew Full Update launcher. GENERATED INTO THE APP by build-app.sh from
+-- brew_full_update.zsh; edit the .zsh file, not the embedded copy.
+-- Choosing "Dry Run" in the dialog previews the update without changing anything.
+set dialogResult to display dialog "Run the full Homebrew update, or preview it with a dry run first?" with title "Brew Command Center" buttons {"Cancel", "Dry Run", "Update"} default button "Update" cancel button "Cancel" giving up after 10
+set modeFlag to ""
+if (gave up of dialogResult) is false and (button returned of dialogResult) is "Dry Run" then set modeFlag to "--dry-run"
+
+set shellCode to "@@SHELL_CODE@@"
+
+-- Run as a .command file so Terminal starts a non-interactive zsh: ~/.zshrc (which sources files in Documents) is never read.
+set tempDir to do shell script "umask 077; /usr/bin/mktemp -d /tmp/brew-full-update.XXXXXX"
+set commandFile to tempDir & "/Brew Full Update.command"
+try
+	set fullCode to "#!/bin/zsh" & linefeed & shellCode & linefeed & "brew_full_update " & modeFlag & linefeed & "update_result=$?" & linefeed & "/bin/rm -rf " & quoted form of tempDir & linefeed & "exit $update_result" & linefeed
+	do shell script "/usr/bin/printf '%s' " & quoted form of fullCode & " > " & quoted form of commandFile & " && /bin/chmod 700 " & quoted form of commandFile
+	do shell script "/usr/bin/open -a Terminal " & quoted form of commandFile
+on error errorMessage number errorNumber
+	do shell script "/bin/rm -rf " & quoted form of tempDir
+	error errorMessage number errorNumber
+end try
