@@ -25,6 +25,13 @@ BFU_TOTAL_STEPS=6
   commander-one
 )
 
+# Names added with the app's Exclusions button, one per line. Blank lines and
+# lines starting with # are ignored. Appended to the list above on every run.
+BFU_EXCLUSIONS_FILE="${BFU_EXCLUSIONS_FILE:-$HOME/Library/Application Support/Brew Full Update/exclusions.txt}"
+if [[ -r "$BFU_EXCLUSIONS_FILE" ]]; then
+  BFU_EXCLUDED_CASKS+=(${(f)"$(sed -n -E 's/^[[:space:]]*([^#[:space:]]+).*/\1/p' "$BFU_EXCLUSIONS_FILE")"})
+fi
+
 # ============================================================================
 # STYLE
 # ============================================================================

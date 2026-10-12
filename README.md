@@ -111,7 +111,11 @@ Every step's output goes to `~/Library/Logs/brew-full-update.log`, which resets 
 
 ## Excluding casks
 
-Any cask whose name starts with an entry in `BFU_EXCLUDED_CASKS` is left alone, so `topaz-photo` also covers `topaz-photo-ai`. The default list is at the top of `brew_full_update.zsh`. To use your own without editing the file, set it before sourcing:
+Any cask whose name starts with an entry in `BFU_EXCLUDED_CASKS` is left alone, so `topaz-photo` also covers `topaz-photo-ai`. The default list is at the top of `brew_full_update.zsh`.
+
+In the app, the **Exclusions** button adds a cask to the list. Names are saved to `~/Library/Application Support/Brew Full Update/exclusions.txt`, one per line, and the script reads that file on every run. The Update dialog then shows them under "Also excluded", and the "Excluding:" line in the output includes them. Edit the file by hand to remove a name.
+
+To use your own list without editing the file, set it before sourcing:
 
 ```zsh
 BFU_EXCLUDED_CASKS=(alfred daisydisk)

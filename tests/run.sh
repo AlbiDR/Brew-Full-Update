@@ -40,6 +40,20 @@ note=$(_bfu_excluded_note)
 [[ "$note" == *"+"*" more" && ${#note} -le 78 ]] && ok "excluded note: long list truncated with +N more" || bad "excluded note truncation" "$note"
 BFU_EXCLUDED_CASKS=()
 
+# --- names saved by the app's Exclusions button are added to the list
+fixture=$(mktemp)
+printf '# saved by the app\n  zoom  \n\nobs-studio\n' > "$fixture"
+n_default=$(zsh -c "source '$src'; print \${#BFU_EXCLUDED_CASKS}")
+eq "exclusions file: names appended, comments and blanks skipped" \
+  "$(BFU_EXCLUSIONS_FILE="$fixture" zsh -c "source '$src'; print -r -- \"\${BFU_EXCLUDED_CASKS[@]: -2}\" | tr '\n' ' '")" "zoom obs-studio "
+eq "exclusions file: count grows by the saved names only" \
+  "$(BFU_EXCLUSIONS_FILE="$fixture" zsh -c "source '$src'; print \${#BFU_EXCLUDED_CASKS}")" "$((n_default + 2))"
+: > "$fixture"
+eq "exclusions file: empty file adds nothing" \
+  "$(BFU_EXCLUSIONS_FILE="$fixture" zsh -c "source '$src'; print \${#BFU_EXCLUDED_CASKS}")" "$n_default"
+BFU_EXCLUSIONS_FILE="$fixture/missing" zsh -c "source '$src'" && ok "exclusions file: missing file is fine" || bad "exclusions file: missing file" "source failed"
+rm -f "$fixture"
+
 # --- closing summary
 out=$(DRY_RUN=false BFU_FAILS=1 BFU_UPGRADED=3 BFU_SKIPPED_NAMES=(slack chrome) BFU_LOG=/x print_summary 9 2>&1)
 [[ "$out" == *"3 upgraded"*"2 skipped"*"1 failed"* && "$out" == *"slack, chrome"* && "$out" == *"Finished with 1 failure"* ]] \
