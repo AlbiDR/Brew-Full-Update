@@ -3,13 +3,13 @@
 -- Choosing "Dry Run" in the dialog previews the update without changing anything.
 -- Choosing "Exclusions" adds a cask to leave out of upgrades; the script reads the saved list on every run.
 set appIcon to path to resource "applet.icns"
-set exclusionsDir to (POSIX path of (path to home folder)) & "Library/Application Support/Brew Full Update"
-set exclusionsFile to exclusionsDir & "/exclusions.txt"
+set appSupportDir to (POSIX path of (path to home folder)) & "Library/Application Support/Brew Full Update"
 set modeFlag to ""
 repeat
+	set exclusionsFile to my currentExclusionsFile(appSupportDir)
 	set dialogResult to display dialog (my mainText(exclusionsFile)) with title "Brew Command Center" with icon appIcon buttons {"Exclusions", "Dry Run", "Update"} default button "Update" giving up after 15
 	if (gave up of dialogResult) is false and (button returned of dialogResult) is "Exclusions" then
-		my addExclusion(exclusionsDir, exclusionsFile)
+		my addExclusion(appSupportDir, exclusionsFile)
 	else
 		if (gave up of dialogResult) is false and (button returned of dialogResult) is "Dry Run" then set modeFlag to "--dry-run"
 		exit repeat
@@ -38,16 +38,28 @@ on mainText(exclusionsFile)
 	return txt
 end mainText
 
+-- The exclusions file: the path saved by the Location button, else the default file.
+on currentExclusionsFile(appSupportDir)
+	set savedPath to do shell script "/bin/cat " & quoted form of (appSupportDir & "/exclusions-location.txt") & " 2>/dev/null | /usr/bin/head -n 1; true"
+	if savedPath is "" then return appSupportDir & "/exclusions.txt"
+	return savedPath
+end currentExclusionsFile
+
 -- Asks for one cask name and appends it to the saved list. Cancel or an invalid name changes nothing.
-on addExclusion(exclusionsDir, exclusionsFile)
+-- Location opens the path chooser instead.
+on addExclusion(appSupportDir, exclusionsFile)
 	set savedNames to my readExclusions(exclusionsFile)
 	set shownNames to "none yet"
 	if (count of savedNames) > 0 then set shownNames to my joinList(savedNames, ", ")
 	try
-		set answer to display dialog "Cask name to leave out of upgrades. Any cask whose name starts with it is skipped." & return & return & "Examples: topaz-photo, firefox" & return & return & "Your exclusions: " & shownNames with title "Brew Command Center" default answer "" buttons {"Cancel", "Add"} default button "Add" cancel button "Cancel"
+		set answer to display dialog "Cask name to leave out of upgrades. Any cask whose name starts with it is skipped." & return & return & "Examples: topaz-photo, firefox" & return & return & "Your exclusions: " & shownNames & return & "File: " & exclusionsFile with title "Brew Command Center" default answer "" buttons {"Cancel", "Location", "Add"} default button "Add" cancel button "Cancel"
 	on error number -128
 		return
 	end try
+	if button returned of answer is "Location" then
+		my changeLocation(appSupportDir, exclusionsFile)
+		return
+	end if
 	set cask to do shell script "printf %s " & quoted form of (text returned of answer) & " | /usr/bin/tr -d '[:space:]' | /usr/bin/tr '[:upper:]' '[:lower:]'"
 	if cask is "" then return
 	set validCount to do shell script "printf %s " & quoted form of cask & " | /usr/bin/grep -E -c '^[a-z0-9][a-z0-9@._+-]*$' || true"
@@ -56,7 +68,7 @@ on addExclusion(exclusionsDir, exclusionsFile)
 		return
 	end if
 	if cask is in savedNames then return
-	do shell script "/bin/mkdir -p " & quoted form of exclusionsDir & " && /usr/bin/printf '%s\\n' " & quoted form of cask & " >> " & quoted form of exclusionsFile
+	do shell script "/bin/mkdir -p \"$(/usr/bin/dirname " & quoted form of exclusionsFile & ")\" && /usr/bin/printf '%s\\n' " & quoted form of cask & " >> " & quoted form of exclusionsFile
 end addExclusion
 
 -- Names saved in the exclusions file, one per line; empty when the file doesn't exist yet.

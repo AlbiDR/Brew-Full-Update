@@ -1,12 +1,12 @@
 #!/usr/bin/env zsh
 
 # ============================================================================
-# BREW FULL UPDATE (v10.0)
+# BREW FULL UPDATE (v10.1)
 # One command to update Homebrew formulae and casks, Mac App Store apps and
 # language-runtime installs, then clean up and report what happened.
 # ============================================================================
 
-BFU_VERSION="10.0"
+BFU_VERSION="10.1"
 BFU_TOTAL_STEPS=6
 
 # ----------------------------------------------------------------------------
@@ -25,9 +25,20 @@ BFU_TOTAL_STEPS=6
   commander-one
 )
 
+# Where the app's Exclusions button saves names: the file path chosen with its
+# Location button (stored in exclusions-location.txt), else the default file.
+_bfu_exclusions_file() {
+  local saved="$HOME/Library/Application Support/Brew Full Update/exclusions-location.txt"
+  if [[ -s "$saved" ]]; then
+    head -n 1 "$saved"
+  else
+    print -r -- "$HOME/Library/Application Support/Brew Full Update/exclusions.txt"
+  fi
+}
+
 # Names added with the app's Exclusions button, one per line. Blank lines and
 # lines starting with # are ignored. Appended to the list above on every run.
-BFU_EXCLUSIONS_FILE="${BFU_EXCLUSIONS_FILE:-$HOME/Library/Application Support/Brew Full Update/exclusions.txt}"
+BFU_EXCLUSIONS_FILE="${BFU_EXCLUSIONS_FILE:-$(_bfu_exclusions_file)}"
 if [[ -r "$BFU_EXCLUSIONS_FILE" ]]; then
   BFU_EXCLUDED_CASKS+=(${(f)"$(sed -n -E 's/^[[:space:]]*([^#[:space:]]+).*/\1/p' "$BFU_EXCLUSIONS_FILE")"})
 fi
@@ -414,6 +425,22 @@ check_system_health() {
       done <<< "$deprecated_items"
     fi
   fi
+
+  # Homebrew's own checks. Informational only: a warning never counts as a failure.
+  local doctor_warnings="" doctor_count=0
+  doctor_warnings=$(brew doctor 2>&1 | _bfu_doctor_warnings)
+  [[ -n "$doctor_warnings" ]] && doctor_count=$(print -r -- "$doctor_warnings" | wc -l | tr -d ' ')
+  if (( doctor_count == 0 )); then
+    print_status "✓" "$accent_green" "Homebrew doctor: no warnings"
+  else
+    print_status "!" "$accent_amber" "Homebrew doctor: $(_bfu_count "$doctor_count" warning warnings), informational only"
+    local warning max=$(( BFU_W - 12 ))
+    while read -r warning; do
+      (( ${#warning} > max )) && warning="${warning[1,max-1]}…"
+      printf "      ${dim}· %s${reset}\n" "$warning"
+    done <<< "$doctor_warnings"
+    printf "      ${dim}Run brew doctor for the full details.${reset}\n"
+  fi
 }
 
 # ============================================================================
@@ -582,7 +609,12 @@ update_casks() {
 
 update_app_store() {
   print_section "App Store"
+  _bfu_update_mas
+  _bfu_check_macos
+}
 
+# Mac App Store apps, through mas. Skipped when mas isn't installed.
+_bfu_update_mas() {
   if ! command -v mas &> /dev/null; then
     print_status "!" "$accent_amber" "mas is not installed (skipped)"
     _bfu_step_note "mas not installed"
@@ -625,30 +657,110 @@ update_app_store() {
   fi
 }
 
+# macOS system updates. Report only: installing them restarts the Mac, so that stays in System Settings.
+_bfu_check_macos() {
+  print_subsection "macOS"
+  local listing pending="" count
+  listing=$(softwareupdate --list 2>&1)
+  pending=$(print -r -- "$listing" | _bfu_macos_updates)
+  if [[ -z "$pending" ]]; then
+    if [[ "$listing" == *"No new software available"* ]]; then
+      print_status "✓" "$accent_green" "macOS is up to date"
+    else
+      print_status "!" "$accent_amber" "Could not check for macOS updates"
+    fi
+    return
+  fi
+  count=$(print -r -- "$pending" | wc -l | tr -d ' ')
+  print_status "›" "$accent_cyan" "$(_bfu_count "$count" update updates) pending, install in System Settings › General › Software Update"
+  local line
+  while read -r line; do
+    printf "      ${accent_amber}↑${reset}  %s\n" "$line"
+  done <<< "$pending"
+}
+
 # ============================================================================
 # 5 · DEV RUNTIMES
 # ============================================================================
 
+# Global packages installed on top of the language managers. Each runs only when its tool is present.
+_bfu_global_packages() {
+  print_subsection "Global packages"
+  local -a names=(npm pipx uv rustup)
+  local -A cmds=(npm "npm update -g" pipx "pipx upgrade-all" uv "uv tool upgrade --all" rustup "rustup update")
+  local tool present=0
+  for tool in "${names[@]}"; do
+    command -v "$tool" &> /dev/null || continue
+    present=$(( present + 1 ))
+    if [[ "$DRY_RUN" == true ]]; then
+      print_status "·" "$dim" "$tool would be synced"
+      continue
+    fi
+    if _bfu_attempt "Syncing $tool" ${(z)cmds[$tool]}; then
+      print_action_result "$tool synced$(_bfu_attempt_note)" "done"
+    else
+      print_action_result "$tool failed$(_bfu_attempt_note)" "fail"
+      print_failure_reason
+    fi
+  done
+  (( present == 0 )) && print_status "·" "$dim" "No global package managers found"
+}
+
+# Oh My Zsh and the plugins and themes cloned into its custom folder. Fast-forward only,
+# so local edits are never overwritten; a repo that can't fast-forward is skipped.
+_bfu_shell_repos() {
+  print_subsection "Shell plugins"
+  local custom="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}" dir out
+  local -a repos=()
+  [[ -d "$HOME/.oh-my-zsh/.git" ]] && repos+=("$HOME/.oh-my-zsh")
+  for dir in "$custom"/plugins/*(/N) "$custom"/themes/*(/N); do
+    [[ -d "$dir/.git" ]] && repos+=("$dir")
+  done
+  if (( ${#repos} == 0 )); then
+    print_status "·" "$dim" "No git-managed shell plugins found"
+    return
+  fi
+  if [[ "$DRY_RUN" == true ]]; then
+    print_status "·" "$dim" "$(_bfu_count "${#repos}" repository repositories) would be updated"
+    return
+  fi
+  for dir in "${repos[@]}"; do
+    if out=$(GIT_TERMINAL_PROMPT=0 git -C "$dir" pull --ff-only 2>&1); then
+      if [[ "$out" == *"Already up to date"* ]]; then
+        print_action_result "${dir:t} is up to date" "done"
+      else
+        print_action_result "${dir:t} updated" "done"
+      fi
+    else
+      _bfu_log "git pull failed in $dir: $out"
+      print_action_result "${dir:t} not updated (local changes or no network)" "skip"
+    fi
+  done
+}
+
 sync_dev_environments() {
   print_section "Dev runtimes"
 
+  local note=""
   if [[ "$DRY_RUN" == true ]]; then
     print_status "·" "$dim" "${dim}Node, Python and Ruby environments would be synced${reset}"
-    _bfu_step_note "dry run"
-    return
+    note="dry run"
+  else
+    local tool label
+    for tool label in nodenv Node pyenv Python rbenv Ruby; do
+      _bfu_log "brew ${tool}-sync"
+      if brew "${tool}-sync" >> "$BFU_LOG" 2>&1; then
+        print_status "✓" "$accent_green" "$label synced"
+        note+="${note:+ · }${label} ✓"
+      else
+        print_status "○" "$accent_cyan" "${label} skipped ${dim}(${tool} not set up)${reset}"
+        note+="${note:+ · }${label} ○"
+      fi
+    done
   fi
 
-  local tool label note=""
-  for tool label in nodenv Node pyenv Python rbenv Ruby; do
-    _bfu_log "brew ${tool}-sync"
-    if brew "${tool}-sync" >> "$BFU_LOG" 2>&1; then
-      print_status "✓" "$accent_green" "$label synced"
-      note+="${note:+ · }${label} ✓"
-    else
-      print_status "○" "$accent_cyan" "${label} skipped ${dim}(${tool} not set up)${reset}"
-      note+="${note:+ · }${label} ○"
-    fi
-  done
+  _bfu_global_packages
+  _bfu_shell_repos
   _bfu_step_note "$note"
 }
 
@@ -685,6 +797,15 @@ optimize_storage() {
     print_status "✓" "$accent_green" "Already tidy"
     _bfu_step_note "already tidy"
   fi
+
+  # What is left in the Homebrew cache, and how much disk this run gained overall.
+  local cache_kb free_kb delta sign=""
+  cache_kb=$(du -sk "$(brew --cache)" 2>/dev/null | awk '{ print $1 }')
+  [[ -n "$cache_kb" ]] && print_status "·" "$dim" "Homebrew cache ${bold}$(_bfu_size "$cache_kb")${reset}"
+  free_kb=$(_bfu_free_kb)
+  delta=$(( free_kb - BFU_FREE_START ))
+  (( delta >= 0 )) && sign="+"
+  print_status "·" "$dim" "Disk ${bold}$(_bfu_size "$free_kb") free${reset} ${dim}(${sign}$(_bfu_size "$delta") this run)${reset}"
 }
 
 # ============================================================================
@@ -747,6 +868,33 @@ _bfu_cask_running() {
   done <<< "$(_bfu_cask_apps "$cask")"
   # Also covers pkg/binary-only casks (no app artifact): nothing to guard.
   return 1
+}
+
+# Free space on the boot volume, in kilobytes.
+_bfu_free_kb() {
+  df -k / | awk 'NR == 2 { print $4 }'
+}
+
+# Kilobytes as a short size: 812.0 KB, 3.2 GB. Negative values keep their minus sign.
+_bfu_size() {
+  awk -v k="$1" 'BEGIN {
+    sign = (k < 0) ? "-" : ""
+    if (k < 0) k = -k
+    split("KB MB GB TB", unit, " ")
+    i = 1
+    while (k >= 1024 && i < 4) { k /= 1024; i++ }
+    printf "%s%.1f %s", sign, k, unit[i]
+  }'
+}
+
+# Headline of each "Warning:" block in `brew doctor` output, one per line.
+_bfu_doctor_warnings() {
+  sed -nE 's/^Warning: +(.*[^[:space:]])[[:space:]]*$/\1/p'
+}
+
+# "Title (Version)" for each pending update in `softwareupdate --list` output.
+_bfu_macos_updates() {
+  sed -nE 's/^[[:space:]]*Title: ([^,]*), Version: ([^,]*),.*/\1 (\2)/p'
 }
 
 # Append a header line to the run log.
@@ -889,6 +1037,7 @@ brew_full_update() {
   esac
 
   local global_start=$SECONDS
+  typeset -g BFU_FREE_START=$(_bfu_free_kb)
 
   print_top_banner "Brew Command Center"
 

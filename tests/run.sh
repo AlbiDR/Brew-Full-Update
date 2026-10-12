@@ -27,6 +27,22 @@ eq "exclude: prefixes only" "$(print -r -- "$in" | _bfu_filter_excluded | tr '\n
 BFU_EXCLUDED_CASKS=()
 eq "exclude: empty list passes all" "$(print -r -- "$in" | _bfu_filter_excluded | wc -l | tr -d ' ')" "4"
 
+# --- sizes shown in cleanup and the disk line
+eq "size: KB"            "$(_bfu_size 512)"     "512.0 KB"
+eq "size: MB"            "$(_bfu_size 2048)"    "2.0 MB"
+eq "size: GB"            "$(_bfu_size 1048576)" "1.0 GB"
+eq "size: negative kept" "$(_bfu_size -2048)"   "-2.0 MB"
+eq "size: zero"          "$(_bfu_size 0)"       "0.0 KB"
+
+# --- brew doctor headlines and macOS update titles (fixed sample output)
+doctor_sample=$'Warning: Unbrewed header files were found in /usr/local/include.\n  Some detail\nWarning: A thing to know.\nYour system is ready to brew.'
+eq "doctor: one headline per warning" "$(print -r -- "$doctor_sample" | _bfu_doctor_warnings | tr '\n' '|')" \
+  "Unbrewed header files were found in /usr/local/include.|A thing to know.|"
+eq "doctor: clean output has none" "$(print -r -- "Your system is ready to brew." | _bfu_doctor_warnings)" ""
+softwareupdate_sample=$'Software Update Tool\n\nFinding available software\nSoftware Update found the following new or updated software:\n* Label: macOS Sequoia 15.5-24F74\n\tTitle: macOS Sequoia 15.5, Version: 15.5, Size: 1234K, Recommended: YES, Action: restart,'
+eq "macOS: title and version" "$(print -r -- "$softwareupdate_sample" | _bfu_macos_updates)" "macOS Sequoia 15.5 (15.5)"
+eq "macOS: nothing pending" "$(print -r -- "No new software available." | _bfu_macos_updates)" ""
+
 # --- failure counter
 BFU_FAILS=0
 print_action_result x fail >/dev/null; print_action_result y done >/dev/null; print_action_result z fail >/dev/null
@@ -53,6 +69,19 @@ eq "exclusions file: empty file adds nothing" \
   "$(BFU_EXCLUSIONS_FILE="$fixture" zsh -c "source '$src'; print \${#BFU_EXCLUDED_CASKS}")" "$n_default"
 BFU_EXCLUSIONS_FILE="$fixture/missing" zsh -c "source '$src'" && ok "exclusions file: missing file is fine" || bad "exclusions file: missing file" "source failed"
 rm -f "$fixture"
+
+# --- exclusions file location: saved by the app's Location button, else the default
+home=$(mktemp -d)
+support="$home/Library/Application Support/Brew Full Update"
+mkdir -p "$support"
+printf 'zoom\n' > "$home/elsewhere.txt"
+eq "location: default file when nothing is saved" \
+  "$(env -u BFU_EXCLUSIONS_FILE HOME="$home" zsh -c "source '$src'; print -r -- \$BFU_EXCLUSIONS_FILE")" "$support/exclusions.txt"
+printf '%s\n' "$home/elsewhere.txt" > "$support/exclusions-location.txt"
+eq "location: saved path is used" \
+  "$(env -u BFU_EXCLUSIONS_FILE HOME="$home" zsh -c "source '$src'; print -r -- \$BFU_EXCLUSIONS_FILE")" "$home/elsewhere.txt"
+eq "location: names read from the saved file" \
+  "$(env -u BFU_EXCLUSIONS_FILE HOME="$home" zsh -c "source '$src'; print -r -- \"\${BFU_EXCLUDED_CASKS[@]: -1}\"")" "zoom"
 
 # --- closing summary
 out=$(DRY_RUN=false BFU_FAILS=1 BFU_UPGRADED=3 BFU_SKIPPED_NAMES=(slack chrome) BFU_LOG=/x print_summary 9 2>&1)

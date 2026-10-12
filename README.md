@@ -94,12 +94,12 @@ The app asks Update, Dry Run or Cancel when you open it, and picks Update after 
 
 ## What it runs
 
-1. Checks the network (exits with code 1 if it's down), runs `brew update`, lists outdated packages, and flags missing or deprecated ones.
+1. Checks the network (exits with code 1 if it's down), runs `brew update`, lists outdated packages, flags missing or deprecated ones, and shows `brew doctor` warnings as information only.
 2. Upgrades formulae one by one, with a spinner and elapsed time for each. A failed upgrade is retried once.
 3. Upgrades casks the same way. It skips excluded casks and any app that's currently running.
-4. `mas upgrade`, if `mas` is installed.
-5. `brew nodenv-sync`, `pyenv-sync`, `rbenv-sync`.
-6. `brew autoremove` and `brew cleanup --prune=7`, so downloads and old versions stick around for a week.
+4. `mas upgrade`, if `mas` is installed. Then it lists pending macOS updates. It only reports them: install those in System Settings, since they can restart the Mac.
+5. `brew nodenv-sync`, `pyenv-sync`, `rbenv-sync`. Then `npm update -g`, `pipx upgrade-all`, `uv tool upgrade --all` and `rustup update`, each only when that tool is installed. Then `git pull --ff-only` for Oh My Zsh and the plugins and themes in its custom folder. A repo with local changes is skipped, never overwritten.
+6. `brew autoremove` and `brew cleanup --prune=7`, so downloads and old versions stick around for a week. Then it shows the Homebrew cache size and the free disk space, with the change made by this run.
 
 It only asks for your admin password (or Touch ID) when app updates are actually pending, since cask installers can need it, and keeps the session alive until the script finishes. Runs with no app updates, and dry runs, never prompt.
 
@@ -147,6 +147,16 @@ make-icon.sh              rebuilds assets/applet.icns from icon.svg
 The app saves a temporary `.command` file and opens it in Terminal, so the script runs in a non-interactive shell and never reads `~/.zshrc`.
 
 ## Changelog
+
+**10.1**
+- Exclusions: the app's Exclusions button adds casks to leave out of upgrades. Names are saved to a file the script reads on every run, and the dialog and output show them.
+- Location: choose where that exclusions file lives, by typing a path or browsing to one. A new file is created if the path doesn't exist yet.
+- The main dialog has three buttons (Exclusions, Dry Run, Update), the most macOS allows. Update stays the default and still starts after the 15-second timeout. Cancel is gone; press Ctrl-C in Terminal to stop a run.
+- Global packages: `npm update -g`, `pipx upgrade-all`, `uv tool upgrade --all` and `rustup update`, each only when installed.
+- Shell plugins: Oh My Zsh and its plugins and themes are updated with `git pull --ff-only`. Repos with local changes are skipped.
+- macOS updates are listed in the App Store section, for information only. Install them in System Settings.
+- `brew doctor` warnings are shown in Diagnostics, for information only.
+- Cleanup shows the Homebrew cache size and the free disk space, with the change made by this run.
 
 **10.0**
 - Redesigned output: gradient header, numbered sections with a six-dot progress rail, a progress line on every package, and dry runs drawn in amber so a preview never looks like the real thing.
