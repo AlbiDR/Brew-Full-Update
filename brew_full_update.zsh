@@ -1,12 +1,12 @@
 #!/usr/bin/env zsh
 
 # ============================================================================
-# BREW FULL UPDATE (v11.0)
+# BREW FULL UPDATE (v11.0.1)
 # One command to update Homebrew formulae and casks, Mac App Store apps and
 # language-runtime installs, then clean up and report what happened.
 # ============================================================================
 
-BFU_VERSION="11.0"
+BFU_VERSION="11.0.1"
 BFU_TOTAL_STEPS=6
 
 # ----------------------------------------------------------------------------
