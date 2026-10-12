@@ -20,8 +20,7 @@ final class RunModel: ObservableObject {
     @Published var showExclusions = false
     @Published var showLog = false
 
-    private var process: Process?
-    private var partial = ""
+    private let runner = ScriptRunner()
     private var launched = false
     private var lastFailed: Int?
     private var demoMode = false
@@ -105,23 +104,17 @@ final class RunModel: ObservableObject {
     /// Asks the script to stop. Its own trap cleans up the sudo session on the way out.
     func stop() {
         stopped = true
-        process?.terminate()
+        runner.stop()
     }
 
     private func run(_ mode: Mode) {
-        guard process == nil else { return }
-        guard let script = Bundle.main.url(forResource: "brew_full_update", withExtension: "zsh") else {
-            failureMessage = "The update script is missing from the app."
-            phase = .failed
-            return
-        }
+        guard !runner.isRunning else { return }
 
         self.mode = mode
         steps = RunModel.freshSteps()
         currentStep = 0
         summary = nil
         log = []
-        partial = ""
         failureMessage = nil
         stopped = false
         lastFailed = nil
@@ -136,54 +129,18 @@ final class RunModel: ObservableObject {
         }
         phase = mode == .check ? .checking : .running
 
-        var env = ProcessInfo.processInfo.environment
-        env["BFU_EVENTS"] = "1"
-        env["NO_COLOR"] = "1"
-        if let askpass = writeAskpass() { env["SUDO_ASKPASS"] = askpass.path }
-        env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
-
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-c", "source \"$1\"; brew_full_update \"$2\"", "zsh", script.path, mode == .check ? "--dry-run" : ""]
-        p.environment = env
-        p.standardInput = FileHandle.nullDevice
-
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = pipe
-        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { return }
-            let text = String(decoding: data, as: UTF8.self)
-            DispatchQueue.main.async { self?.consume(text) }
-        }
-        p.terminationHandler = { [weak self] proc in
-            pipe.fileHandleForReading.readabilityHandler = nil
-            let rest = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            let code = proc.terminationStatus
-            DispatchQueue.main.async {
-                self?.consume(rest)
-                self?.finish(status: code)
-            }
-        }
-
-        do {
-            try p.run()
-            process = p
-        } catch {
-            failureMessage = "Could not start: \(error.localizedDescription)"
+        let error = runner.start(
+            arguments: [mode == .check ? "--dry-run" : ""],
+            onLine: { [weak self] in self?.handle($0) },
+            onExit: { [weak self] in self?.finish(status: $0) }
+        )
+        if let error {
+            failureMessage = error
             phase = .failed
         }
     }
 
     // MARK: Parsing the feed
-
-    private func consume(_ text: String) {
-        partial += text
-        var lines = partial.components(separatedBy: "\n")
-        partial = lines.removeLast()
-        lines.forEach(handle)
-    }
 
     private func handle(_ line: String) {
         guard line.hasPrefix("@@BFU ") else {
@@ -311,12 +268,6 @@ final class RunModel: ObservableObject {
     }
 
     private func finish(status: Int32) {
-        if !partial.isEmpty {
-            handle(partial)
-            partial = ""
-        }
-        process = nil
-
         for i in steps.indices where steps[i].status == .running {
             steps[i].status = status == 0 ? RunModel.classify(steps[i].note) : .failed
         }
@@ -364,25 +315,6 @@ final class RunModel: ObservableObject {
     private func appendLog(_ line: String) {
         log.append(line)
         if log.count > 1500 { log.removeFirst(300) }
-    }
-
-    /// A small askpass helper for sudo, so the admin password prompt is a native dialog.
-    /// Written on each run so it always matches the app.
-    private func writeAskpass() -> URL? {
-        let url = Exclusions.supportDir.appendingPathComponent("askpass.sh")
-        let body = """
-        #!/bin/sh
-        # Password prompt for sudo, used only by Brew Full Update.
-        /usr/bin/osascript -e 'text returned of (display dialog "Admin password needed to install app updates." default answer "" with hidden answer with title "Brew Command Center" buttons {"Cancel", "OK"} default button "OK")'
-        """
-        do {
-            try FileManager.default.createDirectory(at: Exclusions.supportDir, withIntermediateDirectories: true)
-            try body.write(to: url, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
-            return url
-        } catch {
-            return nil
-        }
     }
 
     // MARK: Demo states

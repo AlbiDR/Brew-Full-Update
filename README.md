@@ -122,6 +122,7 @@ Open it and it checks. When the check finishes you see the updates waiting, and 
 | **Install N Updates** | Installs everything in the list. |
 | **Check Again** | Looks again, without installing anything. |
 | **Stop** | Stops a check or an update. The script cleans up after itself. |
+| **Adopt** (top right) | Bring hand-installed apps and missing taps under Homebrew. A badge shows how many apps are ready. |
 | **Exclusions** (top right) | Choose apps to leave out of updates. |
 | **Log** (top right) | The raw log, with Copy and Open Log File. |
 
@@ -136,6 +137,7 @@ Admin rights are asked for only when app updates are waiting, through a native p
 | `⌘U` | Install updates |
 | `⌘R` | Check again |
 | `⌘.` | Stop |
+| `⇧⌘A` | Adopt apps and taps |
 | `⇧⌘E` | Exclusions |
 | `⌥⌘L` | Log |
 
@@ -155,6 +157,22 @@ Admin rights are asked for only when app updates are waiting, through a native p
 Before the first upgrade, the versions you have installed are written to the log, so you can see what to roll back to if an update breaks something. Every step's output goes to `~/Library/Logs/brew-full-update.log`, which resets once it passes 1 MB.
 
 <br>
+
+## Adopting apps and taps
+
+<img align="right" src="assets/screenshots/adopt.png" width="360" alt="The Adopt sheet listing apps Homebrew could manage, with their real icons, and a tap to add back">
+
+Apps you dragged into Applications yourself don't get Homebrew updates. **Adopt** finds them and lets Homebrew take over, with `brew install --cask --adopt`.
+
+- **Ready to adopt.** Apps that match a cask. The ones whose version matches Homebrew's are ticked for you.
+- **Update these first.** Apps older than Homebrew's version. Homebrew can only adopt an app that is identical to its own, so these are listed but not selectable until you update them.
+- **Taps to add back.** Installed formulae and casks that came from a tap you have since removed, so Homebrew can no longer update them. One tick adds the tap again.
+- **Add a tap.** Type `user/repo` to tap a repository, then it scans again. A tap can reveal casks for apps that had none.
+- **No cask found.** Apps that no cask is known for, such as ones installed by a package, are listed in a fold-out.
+
+Nothing is adopted until you choose it, and the scan changes nothing. It reads Homebrew's cached index, so it needs no network and takes about a second. Apps from the Mac App Store, Apple's own apps, and apps Homebrew already manages are left out. If an adoption fails, the sheet shows Homebrew's reason under the app.
+
+<br clear="right">
 
 ## Exclusions
 
@@ -179,8 +197,11 @@ source ~/Brew-Full-Update/brew_full_update.zsh
 The same script runs in any terminal:
 
 ```zsh
-brew-full-update              # update everything
-brew-full-update --dry-run    # preview only; also -d
+brew-full-update                    # update everything
+brew-full-update --dry-run          # preview only; also -d
+brew-full-update --adopt-scan       # list apps and taps Homebrew could adopt (changes nothing)
+brew-full-update --adopt google-chrome   # adopt one or more casks
+brew-full-update --tap user/repo    # add one or more taps
 ```
 
 A dry run changes nothing. This is what it prints:
@@ -285,7 +306,7 @@ make-icon.sh              rebuilds assets/applet.icns and assets/icon.png
 
 **How the window and the script talk.** The app runs the script in a non-interactive shell with `BFU_EVENTS=1`. The script then prints progress lines that start with `@@BFU`, such as `queued|cask|figma|125.1|126.0|major`. The window turns them into the queue, the ring and the summary. Terminal runs never set the variable, so they see none of it. The shell never reads `~/.zshrc`.
 
-**Screenshots.** `--demo <state>` opens the window in a fixed state and never runs the script. The states are `checking`, `ready`, `uptodate`, `running`, `finished`, `failed`, `stopped`, `error`, `exclusions` and `log`. `-BFUAppearance dark` forces dark mode.
+**Screenshots.** `--demo <state>` opens the window in a fixed state and never runs the script. The states are `checking`, `ready`, `uptodate`, `running`, `finished`, `failed`, `stopped`, `error`, `exclusions`, `log`, `adopt`, `adopt-running`, `adopt-done`, `adopt-empty` and `adopt-scanning`. `-BFUAppearance dark` forces dark mode.
 
 ```bash
 "build/Brew Full Update.app/Contents/MacOS/Brew Full Update" --demo ready
@@ -294,6 +315,14 @@ make-icon.sh              rebuilds assets/applet.icns and assets/icon.png
 <br>
 
 ## Changelog
+
+**11.1**
+- **Adopt apps and taps.** A new Adopt sheet finds apps you installed by hand that a Homebrew cask can manage, and taps that installed packages came from but that are no longer added. Tick what you want and adopt it; nothing happens on its own.
+- Apps are matched to casks from Homebrew's cached index, offline and in about a second. Apps older than Homebrew's version are flagged, since Homebrew can only adopt an identical app.
+- The scan runs when the app opens, and a badge on the Adopt button shows how many apps are ready.
+- Command line: `--adopt-scan`, `--adopt <cask>` and `--tap <user/repo>`.
+- Shortcut `⇧⌘A`.
+- Internally, the app and the Adopt sheet share one script runner.
 
 **11.0.1**
 - New app icon: a glass orb with a terminal prompt inside a progress ring, drawn to match the window.

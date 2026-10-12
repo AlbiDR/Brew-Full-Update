@@ -52,6 +52,58 @@ BFU_LAST_ERROR="boom"
 eq "feed: failure reason" "$(BFU_EVENTS=1 print_failure_reason | grep '^@@BFU')" "@@BFU reason|boom"
 BFU_LAST_ERROR=""
 
+# --- adoption scanner (fixtures only; nothing on this Mac is read)
+fx=$(mktemp -d)
+/usr/bin/python3 - "$fx" <<'PY'
+import json, os, plistlib, sys
+fx = sys.argv[1]
+def app(name, version, bundle, receipt=False):
+    base = os.path.join(fx, "Applications", name + ".app", "Contents")
+    os.makedirs(base)
+    plistlib.dump({"CFBundleShortVersionString": version, "CFBundleIdentifier": bundle}, open(os.path.join(base, "Info.plist"), "wb"))
+    if receipt: os.makedirs(os.path.join(base, "_MASReceipt"))
+app("Foo", "1.2.0", "com.example.foo")           # matches its cask exactly
+app("Bar", "1.0", "com.example.bar")             # older than its cask; also has an @beta cask
+app("Mystery", "3.1", "com.example.mystery")     # no cask known
+app("Managed", "1.0", "com.example.managed")     # already in the Caskroom
+app("Store", "1.0", "com.example.store", True)   # Mac App Store
+app("Safari", "17", "com.apple.Safari")          # Apple
+casks = {
+  "foo": {"version": "1.2.0", "tap_string": "homebrew/cask", "raw_artifacts": [[":app", ["Foo.app"]]]},
+  "bar": {"version": "2.0", "tap_string": "homebrew/cask", "raw_artifacts": [[":app", ["Bar.app"]]]},
+  "bar@beta": {"version": "2.1", "tap_string": "homebrew/cask", "raw_artifacts": [[":app", ["Bar.app"]]]},
+}
+os.makedirs(os.path.join(fx, "api"))
+json.dump({"payload": json.dumps({"casks": casks})}, open(os.path.join(fx, "api", "packages.test.jws.json"), "w"))
+os.makedirs(os.path.join(fx, "caskroom", "managed-cask", "1.0"))
+open(os.path.join(fx, "caskroom", "managed-cask", "1.0", "Managed.app"), "w").close()
+meta = os.path.join(fx, "caskroom", "zcask", ".metadata", "1.0", "0", "Casks")
+os.makedirs(meta)
+json.dump({"tap": "someone/tap"}, open(os.path.join(meta, "zcask.json"), "w"))
+for name, tap in (("wget", "homebrew/core"), ("mytool", "me/tools")):
+    d = os.path.join(fx, "cellar", name, "1.0")
+    os.makedirs(d)
+    json.dump({"source": {"tap": tap}}, open(os.path.join(d, "INSTALL_RECEIPT.json"), "w"))
+os.makedirs(os.path.join(fx, "taps"))
+PY
+scan=$(BFU_API_DIR="$fx/api" BFU_TAPS_DIR="$fx/taps" BFU_CASKROOM="$fx/caskroom" BFU_CELLAR="$fx/cellar" \
+  BFU_APP_DIRS="$fx/Applications" BFU_TAPS_LIST="" _bfu_adopt_scan_data)
+has() { [[ "$scan" == *"$1"* ]] && ok "adopt: $2" || bad "adopt: $2" "$scan"; }
+lacks() { [[ "$scan" != *"$1"* ]] && ok "adopt: $2" || bad "adopt: $2" "$scan"; }
+has   $'A\tfoo\tFoo\t1.2.0\t1.2.0\thomebrew/cask\tmatch'  "an exact match is ready to adopt"
+has   $'A\tbar\tBar\t1.0\t2.0\thomebrew/cask\tolder'      "an older app is flagged, and the plain cask beats @beta"
+lacks "bar@beta"                                          "variants are not offered"
+has   $'U\tMystery\t3.1\tcom.example.mystery'             "an app with no cask is listed apart"
+lacks "Managed"                                           "apps Homebrew already manages are skipped"
+lacks "Store"                                             "Mac App Store apps are skipped"
+lacks "Safari"                                            "Apple apps are skipped"
+has   $'T\tme/tools\tformula:mytool'                      "a formula from a missing tap is found"
+has   $'T\tsomeone/tap\tcask:zcask'                       "a cask from a missing tap is found"
+lacks "homebrew/core"                                     "the official tap is never reported"
+scan=$(BFU_API_DIR="$fx/api" BFU_TAPS_DIR="$fx/taps" BFU_CASKROOM="$fx/caskroom" BFU_CELLAR="$fx/cellar" \
+  BFU_APP_DIRS="$fx/Applications" BFU_TAPS_LIST=$'me/tools\nsomeone/tap' _bfu_adopt_scan_data)
+lacks $'T\t'                                              "added taps are no longer reported"
+
 # --- failure counter
 BFU_FAILS=0
 print_action_result x fail >/dev/null; print_action_result y done >/dev/null; print_action_result z fail >/dev/null
@@ -196,6 +248,7 @@ cat > "$tmp/brew" <<'B'
 case "$1" in
   outdated) [[ "$2" == --formula ]] && echo "wget (1.0) < 2.0" ;;
   info) echo '{"formulae":[],"casks":[]}' ;;
+  install) [[ "$*" == *badcask* ]] && { echo "Error: It seems there is already an App at '/Applications/Bad.app'."; exit 1; } ;;
 esac
 exit 0
 B
@@ -214,6 +267,24 @@ out=$(run 0)
   && ok "dry run: shows versions, completes, exit 0" || bad "dry run" "$out"
 [[ "$out" == *"Excluding: alfred"* ]] && ok "dry run: exclusion note from config" || bad "exclusion note" "$out"
 [[ -f "$tmp/Library/Logs/brew-full-update.log" ]] && ok "log file created under HOME" || bad "log file" "missing"
+
+# --- adopting apps and adding taps
+run_mode() { HOME="$tmp" PATH="$tmp:/usr/bin:/bin:/usr/sbin:/sbin" BFU_EVENTS=1 zsh -c "source '$src'; brew_full_update $1; echo EXIT=\$?" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
+out=$(run_mode "--adopt goodcask")
+[[ "$out" == *"@@BFU item|1|1|goodcask|"* && "$out" == *"@@BFU result|done|Adopted"* && "$out" == *"EXIT=0"* ]] \
+  && ok "adopt: an adoption reports its item and result" || bad "adopt success" "$out"
+out=$(run_mode "--adopt badcask")
+[[ "$out" == *"@@BFU result|fail|Could not adopt"* && "$out" == *"@@BFU reason|It seems there is already an App"* && "$out" == *"EXIT=1"* ]] \
+  && ok "adopt: a failure carries Homebrew's reason and exits 1" || bad "adopt failure" "$out"
+out=$(run_mode "--tap me/tools")
+[[ "$out" == *"@@BFU item|1|1|me/tools|"* && "$out" == *"@@BFU result|done|Added"* && "$out" == *"EXIT=0"* ]] \
+  && ok "tap: adding a tap reports its item and result" || bad "tap success" "$out"
+out=$(run_mode "--adopt")
+[[ "$out" == *"Usage: brew_full_update --adopt"* && "$out" == *"EXIT=2"* ]] \
+  && ok "adopt: no cask given prints usage, exit 2" || bad "adopt usage" "$out"
+out=$(run_mode "--adopt-scan")
+[[ "$out" == *"@@BFU scandone|"* && "$out" == *"EXIT=0"* ]] \
+  && ok "adopt: the scan ends with a scandone event" || bad "adopt scan" "$out"
 
 print "\n$pass passed, $fail failed"
 (( fail == 0 ))

@@ -158,7 +158,7 @@ private struct BumpPill: View {
     }
 }
 
-private struct StateMark: View {
+struct StateMark: View {
     let state: ItemState
     let kind: Kind
 

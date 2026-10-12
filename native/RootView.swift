@@ -3,6 +3,7 @@ import SwiftUI
 
 struct RootView: View {
     @ObservedObject var model: RunModel
+    @ObservedObject var adopt: AdoptModel
 
     private var showsQueue: Bool {
         !(model.actionable + model.issues + model.manual).isEmpty && model.phase != .checking
@@ -13,7 +14,7 @@ struct RootView: View {
             Backdrop(tone: model.tone)
 
             VStack(spacing: 0) {
-                TopBar(model: model)
+                TopBar(model: model, adopt: adopt)
 
                 Spacer(minLength: 8)
 
@@ -47,7 +48,13 @@ struct RootView: View {
         .sheet(isPresented: $model.showLog) {
             LogSheet(lines: model.log)
         }
-        .onAppear { model.launch() }
+        .sheet(isPresented: $adopt.showing) {
+            AdoptSheet(model: adopt)
+        }
+        .onAppear {
+            model.launch()
+            adopt.scan()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             model.stop()
         }
@@ -58,12 +65,16 @@ struct RootView: View {
 
 private struct TopBar: View {
     @ObservedObject var model: RunModel
+    @ObservedObject var adopt: AdoptModel
 
     var body: some View {
         HStack {
             Spacer()
             GlassEffectContainer(spacing: 10) {
                 HStack(spacing: 10) {
+                    IconButton(symbol: "plus.app", label: "Adopt apps and taps", badge: adopt.readyCount) {
+                        adopt.showing = true
+                    }
                     IconButton(symbol: "nosign", label: "Exclusions", badge: model.excluded.count) {
                         model.showExclusions = true
                     }

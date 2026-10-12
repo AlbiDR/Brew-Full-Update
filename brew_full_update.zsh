@@ -1,12 +1,12 @@
 #!/usr/bin/env zsh
 
 # ============================================================================
-# BREW FULL UPDATE (v11.0.1)
+# BREW FULL UPDATE (v11.1)
 # One command to update Homebrew formulae and casks, Mac App Store apps and
 # language-runtime installs, then clean up and report what happened.
 # ============================================================================
 
-BFU_VERSION="11.0.1"
+BFU_VERSION="11.1"
 BFU_TOTAL_STEPS=6
 
 # ----------------------------------------------------------------------------
@@ -268,6 +268,7 @@ _bfu_hint() {
     *"Command Line Tools"*|*CLT*) printf 'Reinstall the Command Line Tools: xcode-select --install' ;;
     *"Permission denied"*|*"not writable"*) printf 'Fix the permissions on that path, then run again' ;;
     *"Could not resolve host"*|*"Failed to connect"*|*"timed out"*) printf 'Looks like a network problem, run again in a moment' ;;
+    *"already an App at"*|*"already a Binary at"*) printf 'The installed app differs from the one Homebrew has. Update the app first, then adopt it' ;;
   esac
 }
 
@@ -1030,6 +1031,271 @@ _bfu_cleanup() {
 }
 
 # ============================================================================
+# ADOPTION: bring hand-installed apps and orphaned taps under Homebrew
+# ============================================================================
+# brew_full_update --adopt-scan            list what could be adopted (changes nothing)
+# brew_full_update --adopt  <cask> ...     brew install --cask --adopt for each cask
+# brew_full_update --tap    <user/repo> .. brew tap for each tap
+
+# The scanner. Reads Homebrew's own cached cask index (and the casks of any tapped repo), so it
+# needs no network. Prints one tab-separated row per finding:
+#   A  token  app  installed  homebrew  tap  status     an app a cask could adopt
+#   U  app  installed  bundle-id                          an app no cask is known for
+#   T  tap  kind:name,kind:name                           a tap that installed items came from but isn't added
+# Directories come from the environment so tests can point it at fixtures.
+_bfu_adopt_scan_data() {
+  /usr/bin/python3 - <<'PY'
+import glob, json, os, plistlib, re, sys
+
+api_dir  = os.environ.get("BFU_API_DIR", "")
+taps_dir = os.environ.get("BFU_TAPS_DIR", "")
+caskroom = os.environ.get("BFU_CASKROOM", "")
+cellar   = os.environ.get("BFU_CELLAR", "")
+app_dirs = [d for d in os.environ.get("BFU_APP_DIRS", "/Applications").split(":") if d]
+tapped   = {t.strip() for t in os.environ.get("BFU_TAPS_LIST", "").splitlines() if t.strip()}
+
+def app_names(raw):
+    """App bundle names a cask installs, from the index's raw artifact list."""
+    out = []
+    for art in raw or []:
+        if not isinstance(art, list) or len(art) < 2 or art[0] != ":app":
+            continue
+        for item in art[1]:
+            if isinstance(item, str):
+                out.append(item)
+            elif isinstance(item, dict) and item.get(":target"):
+                out.append(item[":target"])
+    return out
+
+index = {}        # app file name (lower case) -> [(token, version, tap)]
+token_apps = {}   # short token -> {app file names (lower case)}
+
+def add(app, token, version, tap, short):
+    index.setdefault(app.lower(), []).append((token, version, tap))
+    token_apps.setdefault(short, set()).add(app.lower())
+
+# 1. Homebrew's cached index of the official casks.
+for path in glob.glob(os.path.join(api_dir, "packages.*.jws.json")):
+    try:
+        payload = json.loads(json.load(open(path))["payload"])
+    except Exception:
+        continue
+    for token, cask in payload.get("casks", {}).items():
+        for app in app_names(cask.get("raw_artifacts")):
+            add(app, token, str(cask.get("version", "")), cask.get("tap_string", "homebrew/cask"), token)
+    break
+
+# 2. Casks in every tapped repository (third-party taps, or the official one on a git install).
+for tapdir in glob.glob(os.path.join(taps_dir, "*", "*")):
+    org, repo = os.path.basename(os.path.dirname(tapdir)), os.path.basename(tapdir)
+    name = f"{org}/{repo.replace('homebrew-', '', 1)}"
+    if name == "homebrew/core":
+        continue
+    for rb in glob.glob(os.path.join(tapdir, "Casks", "**", "*.rb"), recursive=True):
+        try:
+            text = open(rb, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        short = os.path.splitext(os.path.basename(rb))[0]
+        ver = re.search(r'^\s*version\s+"([^"]+)"', text, re.M)
+        full = short if name == "homebrew/cask" else f"{name}/{short}"
+        for app, target in re.findall(r'^\s*app\s+"([^"]+)"(?:\s*,\s*target:\s*"([^"]+)")?', text, re.M):
+            add(target or app, full, ver.group(1) if ver else "", name, short)
+
+# 3. Apps Homebrew already manages.
+managed = set()
+if caskroom and os.path.isdir(caskroom):
+    for token in os.listdir(caskroom):
+        if token.startswith("."):
+            continue
+        managed |= token_apps.get(token, set())
+        for app in glob.glob(os.path.join(caskroom, token, "*", "*.app")):
+            managed.add(os.path.basename(app).lower())
+
+def nums(version):
+    return tuple(int(n) for n in re.findall(r"\d+", version.split(",")[0].split(":")[0]))
+
+def status(installed, cask):
+    if cask.split(",")[0] == "latest":
+        return "latest"
+    a, b = nums(installed), nums(cask)
+    if not a or not b:
+        return "unknown"
+    return "match" if a == b else ("older" if a < b else "newer")
+
+def pick(options):
+    """Prefer official, plain tokens (no @beta variants), then the shortest."""
+    return sorted(options, key=lambda o: ("@" in o[0], o[2] != "homebrew/cask", len(o[0]), o[0]))[0]
+
+# 4. Apps in the app folders that no cask manages.
+for base in app_dirs:
+    if not os.path.isdir(base):
+        continue
+    for entry in sorted(os.listdir(base)):
+        path = os.path.join(base, entry)
+        if not entry.endswith(".app") or entry.lower() in managed:
+            continue
+        if os.path.exists(os.path.join(path, "Contents", "_MASReceipt")):
+            continue
+        try:
+            info = plistlib.load(open(os.path.join(path, "Contents", "Info.plist"), "rb"))
+        except Exception:
+            info = {}
+        bundle = info.get("CFBundleIdentifier", "")
+        if bundle.startswith("com.apple.") or bundle == "com.hidoly.brew-full-update":
+            continue
+        installed = str(info.get("CFBundleShortVersionString") or info.get("CFBundleVersion") or "")
+        name = entry[:-4]
+        options = index.get(entry.lower())
+        if not options:
+            print("\t".join(["U", name, installed, bundle]))
+            continue
+        token, version, tap = pick(options)
+        print("\t".join(["A", token, name, installed, version, tap, status(installed, version)]))
+
+# 5. Taps that installed formulae and casks came from, but that are no longer added.
+known = tapped | {"homebrew/core", "homebrew/cask"}
+orphans = {}
+if cellar and os.path.isdir(cellar):
+    for receipt in glob.glob(os.path.join(cellar, "*", "*", "INSTALL_RECEIPT.json")):
+        try:
+            tap = (json.load(open(receipt)).get("source") or {}).get("tap")
+        except Exception:
+            continue
+        if tap and tap not in known:
+            orphans.setdefault(tap, set()).add("formula:" + receipt.split(os.sep)[-3])
+if caskroom and os.path.isdir(caskroom):
+    for meta in glob.glob(os.path.join(caskroom, "*", ".metadata", "*", "*", "Casks", "*.json")):
+        try:
+            tap = json.load(open(meta)).get("tap")
+        except Exception:
+            continue
+        if tap and tap not in known:
+            orphans.setdefault(tap, set()).add("cask:" + os.path.basename(meta)[:-5])
+for tap, items in sorted(orphans.items()):
+    print("\t".join(["T", tap, ",".join(sorted(items))]))
+PY
+}
+
+# Scan, then print what could be adopted and emit one event per finding.
+_bfu_adopt_scan() {
+  local rows kind a b c d e f
+  local -a ready=() stale=() other=() orphans=()
+  rows=$(BFU_API_DIR="${BFU_API_DIR:-$(brew --cache)/api/internal}" \
+         BFU_TAPS_DIR="${BFU_TAPS_DIR:-$(brew --repository)/Library/Taps}" \
+         BFU_CASKROOM="${BFU_CASKROOM:-$(brew --caskroom)}" \
+         BFU_CELLAR="${BFU_CELLAR:-$(brew --cellar)}" \
+         BFU_APP_DIRS="${BFU_APP_DIRS:-/Applications:$HOME/Applications}" \
+         BFU_TAPS_LIST="${BFU_TAPS_LIST-$(brew tap 2>/dev/null)}" \
+         _bfu_adopt_scan_data 2>>"$BFU_LOG")
+
+  while IFS=$'\t' read -r kind a b c d e f; do
+    case "$kind" in
+      A)
+        _bfu_emit adopt "$a" "$b" "$c" "$d" "$e" "$f"
+        if [[ "$f" == older ]]; then
+          stale+=("$b|$c|$d|$a")
+        else
+          ready+=("$b|$c|$d|$a|$f")
+        fi ;;
+      U) _bfu_emit noncask "$a" "$b" "$c"; other+=("$a") ;;
+      T) _bfu_emit untapped "$a" "$b"; orphans+=("$a|$b") ;;
+    esac
+  done <<< "$rows"
+  _bfu_emit scandone "$(( ${#ready} + ${#stale} ))" "${#other}" "${#orphans}"
+
+  local item app ver cask token st
+  print_subsection "Apps Homebrew could adopt"
+  if (( ${#ready} + ${#stale} == 0 )); then
+    print_status "✓" "$accent_green" "Every app that has a cask is already managed"
+  fi
+  for item in "${ready[@]}"; do
+    app="${item%%|*}"; token=$(print -r -- "$item" | cut -d'|' -f4); ver=$(print -r -- "$item" | cut -d'|' -f2)
+    print_status "↑" "$accent_green" "${(r:26:)app} ${dim}${ver}  →  ${token}${reset}"
+  done
+  for item in "${stale[@]}"; do
+    app="${item%%|*}"; ver=$(print -r -- "$item" | cut -d'|' -f2); cask=$(print -r -- "$item" | cut -d'|' -f3); token=$(print -r -- "$item" | cut -d'|' -f4)
+    print_status "!" "$accent_amber" "${(r:26:)app} ${dim}${ver}, Homebrew has ${cask}. Update the app first, then adopt${reset}"
+  done
+
+  if (( ${#other} > 0 )); then
+    print_subsection "No cask found"
+    printf "    ${dim}%s${reset}\n" "${(j:, :)other}"
+  fi
+  if (( ${#orphans} > 0 )); then
+    print_subsection "Taps to add back"
+    for item in "${orphans[@]}"; do
+      print_status "!" "$accent_amber" "${item%%|*} ${dim}(${item#*|})${reset}"
+    done
+  fi
+  print_status "·" "$dim" "${dim}Nothing was changed. Adopt with: brew-full-update --adopt <cask>${reset}"
+}
+
+# brew install --cask --adopt for each token.
+_bfu_adopt_apply() {
+  (( $# > 0 )) || { printf "Usage: brew_full_update --adopt <cask> [cask ...]\n"; return 2; }
+  local n=$# i=0 token
+  print_subsection "Adopting"
+  for token in "$@"; do
+    i=$(( i + 1 ))
+    print_action_start "$i" "$n" "$token" ""
+    if _bfu_attempt "Adopting" brew install --cask --adopt "$token"; then
+      BFU_UPGRADED=$(( BFU_UPGRADED + 1 ))
+      print_action_result "Adopted$(_bfu_attempt_note)" "done"
+    else
+      print_action_result "Could not adopt$(_bfu_attempt_note)" "fail"
+      print_failure_reason
+    fi
+  done
+}
+
+# brew tap for each user/repo.
+_bfu_tap_apply() {
+  (( $# > 0 )) || { printf "Usage: brew_full_update --tap <user/repo> [user/repo ...]\n"; return 2; }
+  local n=$# i=0 repo
+  print_subsection "Adding taps"
+  for repo in "$@"; do
+    i=$(( i + 1 ))
+    print_action_start "$i" "$n" "$repo" ""
+    if _bfu_attempt "Tapping" brew tap "$repo"; then
+      BFU_UPGRADED=$(( BFU_UPGRADED + 1 ))
+      print_action_result "Added$(_bfu_attempt_note)" "done"
+    else
+      print_action_result "Could not add$(_bfu_attempt_note)" "fail"
+      print_failure_reason
+    fi
+  done
+}
+
+# Entry point for the three adoption modes. Sets up what the shared helpers expect.
+_bfu_adopt_main() {
+  setopt localoptions no_monitor localtraps
+  local mode="$1"; shift
+  trap '_bfu_cleanup' EXIT
+  trap '_bfu_cleanup; printf "\n"; return 130' INT TERM
+
+  typeset -g SUDO_PID="" BFU_FAILS=0 BFU_UPGRADED=0 BFU_PENDING=0 BFU_CHILD_PID="" BFU_RETRIED="" BFU_RUN_SECS=0 BFU_SPIN_INDENT="" BFU_LAST_ERROR=""
+  typeset -g BFU_STEP=0 BFU_STEP_T0=""
+  typeset -ga BFU_SKIPPED_NAMES=() BFU_STEP_TITLES=() BFU_STEP_SECS=() BFU_STEP_NOTES=()
+  _bfu_init_ui
+  typeset -g BFU_LOG="$HOME/Library/Logs/brew-full-update.log"
+  mkdir -p "${BFU_LOG:h}"
+  _bfu_log "=== brew_full_update $mode $* ==="
+
+  local start=$SECONDS rc=0
+  printf "\n"
+  case "$mode" in
+    --adopt-scan) _bfu_adopt_scan ;;
+    --adopt)      _bfu_adopt_apply "$@" || rc=$? ;;
+    --tap)        _bfu_tap_apply "$@" || rc=$? ;;
+  esac
+  printf "\n"
+  _bfu_emit summary "$(( SECONDS - start ))" "$BFU_UPGRADED" 0 "$BFU_FAILS" false
+  (( BFU_FAILS > 0 )) && rc=1
+  return $rc
+}
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
@@ -1040,6 +1306,10 @@ brew_full_update() {
     printf "Error: Homebrew not found. Install at https://brew.sh\n"
     return 1
   fi
+
+  case "$1" in
+    --adopt-scan|--adopt|--tap) _bfu_adopt_main "$@"; return $? ;;
+  esac
 
   # Stop the sudo keepalive and any running step on exit or interrupt.
   trap '_bfu_cleanup' EXIT
