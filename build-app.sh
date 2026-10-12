@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Build "Brew Full Update.app" from brew_full_update.zsh.
+# Build "Brew Full Update.app": a native window that runs brew_full_update.zsh.
 #   ./build-app.sh [--out DIR]        (default: ./build)
 # Env: BFU_SIGN_ID  codesign identity (default "-" = ad-hoc)
 set -eu
@@ -10,7 +10,6 @@ out="$here/build"
 [[ "${1:-}" == "--out" ]] && out="${2:?--out needs a directory}"
 
 src="$here/brew_full_update.zsh"
-template="$here/launcher.applescript.in"
 app="$out/Brew Full Update.app"
 bundle_id="com.hidoly.brew-full-update"
 sign_id="${BFU_SIGN_ID:--}"
@@ -19,38 +18,39 @@ zsh -n "$src"
 version=$(sed -nE 's/^BFU_VERSION="([^"]+)"/\1/p' "$src")
 [[ -n "$version" ]] || { echo "BFU_VERSION not found in $src" >&2; exit 1; }
 
-# Embed the script, escaped for an AppleScript string literal.
-code="export PATH=/opt/homebrew/bin:/usr/local/bin:\$PATH"$'\n'"$(<"$src")"$'\n'
-esc="${code//\\/\\\\}"
-esc="${esc//\"/\\\"}"
-tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-print -rn -- "${"$(<"$template")"/@@SHELL_CODE@@/$esc}" > "$tmp/launcher.applescript"
+rm -rf "$app"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
-mkdir -p "$out"; rm -rf "$app"
-osacompile -o "$app" "$tmp/launcher.applescript"
+# The script ships inside the bundle, so the window always runs the same version it was built with.
+cp "$src" "$app/Contents/Resources/brew_full_update.zsh"
+cp "$here/assets/applet.icns" "$app/Contents/Resources/AppIcon.icns"
 
-# Icon + identity
-cp "$here/assets/applet.icns" "$app/Contents/Resources/"
-# The stock applet ships an asset catalog with its own icon; drop it so applet.icns is used.
-rm -f "$app/Contents/Resources/Assets.car"
-plutil -remove CFBundleIconName "$app/Contents/Info.plist" 2>/dev/null || true
-plist="$app/Contents/Info.plist"
-plutil -replace CFBundleIdentifier -string "$bundle_id" "$plist"
-plutil -replace CFBundleName -string "Brew Full Update" "$plist"
-plutil -replace CFBundleShortVersionString -string "$version" "$plist"
-plutil -replace CFBundleVersion -string "$version" "$plist"
-xattr -cr "$app"
-codesign --force --deep -s "$sign_id" "$app" 2>/dev/null
-codesign --verify --deep "$app"
+# The window uses macOS 27 APIs (tabs picker, Liquid Glass), so that is the deployment target.
+swiftc -O -swift-version 5 -parse-as-library -target "$(uname -m)-apple-macos27.0" \
+  -o "$app/Contents/MacOS/Brew Full Update" "$here"/native/*.swift
 
-# Verify the embedded source is byte-identical to the file.
-embedded=$(osadecompile "$app/Contents/Resources/Scripts/main.scpt" \
-  | awk '/^set shellCode to "/{f=1} f{print} /^"$/ && f{exit}')
-check="$tmp/embedded.zsh"
-print -r -- "$embedded" | sed '1s/^set shellCode to "//' | sed '$d' \
-  | sed 's/\\"/"/g; s/\\\\/\\/g' > "$check"
-if [[ "$(<"$check")" == *"$(<"$src")"* ]]; then
-  echo "Built $app (v$version, signed: $sign_id) - embedded source verified"
-else
-  echo "Embedded source does not match $src" >&2; exit 1
-fi
+cat > "$app/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Brew Full Update</string>
+  <key>CFBundleDisplayName</key><string>Brew Full Update</string>
+  <key>CFBundleExecutable</key><string>Brew Full Update</string>
+  <key>CFBundleIdentifier</key><string>${bundle_id}</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>${version}</string>
+  <key>CFBundleVersion</key><string>${version}</string>
+  <key>LSMinimumSystemVersion</key><string>27.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+</dict>
+</plist>
+PLIST
+
+codesign --force --deep --sign "$sign_id" "$app" >/dev/null 2>&1
+
+cmp -s "$src" "$app/Contents/Resources/brew_full_update.zsh" \
+  || { echo "embedded script differs from source" >&2; exit 1; }
+echo "Built $app (v$version, signed: $sign_id) - embedded script verified"

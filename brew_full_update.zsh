@@ -1,12 +1,12 @@
 #!/usr/bin/env zsh
 
 # ============================================================================
-# BREW FULL UPDATE (v10.1)
+# BREW FULL UPDATE (v11.0)
 # One command to update Homebrew formulae and casks, Mac App Store apps and
 # language-runtime installs, then clean up and report what happened.
 # ============================================================================
 
-BFU_VERSION="10.1"
+BFU_VERSION="11.0"
 BFU_TOTAL_STEPS=6
 
 # ----------------------------------------------------------------------------
@@ -142,6 +142,7 @@ _bfu_step_close() {
 # Remember a short result for the current step (shown in the closing summary).
 _bfu_step_note() {
   BFU_STEP_NOTES[$BFU_STEP]="$1"
+  _bfu_emit note "$1"
 }
 
 # Header banner: name and version, then machine context.
@@ -178,6 +179,7 @@ print_section() {
   BFU_STEP=$(( BFU_STEP + 1 ))
   BFU_STEP_TITLES[$BFU_STEP]="$1"
   BFU_STEP_T0=$SECONDS
+  _bfu_emit step "$BFU_STEP" "$BFU_TOTAL_STEPS" "$1"
 
   local label="${BFU_STEP} · $1" i rail="" rail_plain=""
   for (( i = 1; i <= BFU_TOTAL_STEPS; i++ )); do
@@ -204,6 +206,7 @@ print_status() {
 # "2/5 ━━━━────  name  1.0 → 2.0": position, progress line, name, versions.
 print_action_start() {
   local index="$1" total="$2" w=${#2}
+  _bfu_emit item "$index" "$total" "$3" "$4"
   printf "    ${accent_cyan}%*s${dim}/%s${reset} %b  ${bold}%s${reset}  ${dim}%s${reset}\n" \
     "$w" "$index" "$total" "$(_bfu_bar "$index" "$total" 8)" "$3" "$4"
 }
@@ -255,6 +258,7 @@ print_action_result() {
     "skip") symbol="○"; color="$accent_cyan" ;;
     "fail") symbol="✗"; color="$accent_red"; BFU_FAILS=$(( BFU_FAILS + 1 )) ;;
   esac
+  _bfu_emit result "$res_status" "$action"
   printf "          ${color}${symbol} ${action}${reset}\n"
 }
 
@@ -270,6 +274,7 @@ _bfu_hint() {
 # Why the last step failed, in a red gutter under its result line.
 print_failure_reason() {
   [[ -n "$BFU_LAST_ERROR" ]] || return 0
+  _bfu_emit reason "$BFU_LAST_ERROR"
   local width=$(( BFU_W - 18 )) row hint
   while IFS= read -r row; do
     printf "          ${accent_red}┃${reset} ${dim}%s${reset}\n" "$row"
@@ -295,6 +300,12 @@ print_summary() {
     title_plain="✓ Update complete"
     title_styled="${bold}${accent_green}✓ Update complete${reset}"
   fi
+
+  _bfu_emit summary "$duration" "$BFU_UPGRADED" "${#BFU_SKIPPED_NAMES}" "$BFU_FAILS" "$DRY_RUN"
+  local j
+  for (( j = 1; j <= ${#BFU_STEP_TITLES}; j++ )); do
+    _bfu_emit row "$j" "${BFU_STEP_TITLES[j]}" "${BFU_STEP_NOTES[j]:-done}" "${BFU_STEP_SECS[j]:-0}"
+  done
 
   printf "\n"
   _bfu_box_top
@@ -389,6 +400,7 @@ check_system_health() {
   [[ -n "$OUTDATED_CASKS" ]] && c_count=$(echo "$OUTDATED_CASKS" | wc -l | tr -d ' ')
   local total_outdated=$(( f_count + c_count ))
   BFU_PENDING=$total_outdated
+  _bfu_emit pending "$total_outdated"
 
   if (( total_outdated > 0 )); then
     print_status "✓" "$accent_green" "$(_bfu_count "$total_outdated" update updates) available ${dim}($(_bfu_count "$f_count" formula formulae), $(_bfu_count "$c_count" cask casks))${reset}"
@@ -475,12 +487,14 @@ _bfu_version_width() {
 
 # Print an outdated list as an aligned queue.
 _bfu_print_queue() {
-  local list="$1" line name
+  local list="$1" kind="${2:-formula}" line name cur new
   BFU_NAME_W=$(_bfu_name_width "$list")
   BFU_VER_W=$(_bfu_version_width "$list")
   while read -r line; do
     name="${line%% *}"
-    print_item_with_versions "$name" "$(_bfu_current_ver "$line")" "$(_bfu_new_ver "$line")"
+    cur=$(_bfu_current_ver "$line"); new=$(_bfu_new_ver "$line")
+    _bfu_emit queued "$kind" "$name" "$cur" "$new" "$(_bfu_bump "$cur" "$new")"
+    print_item_with_versions "$name" "$cur" "$new"
   done <<< "$list"
 }
 
@@ -509,7 +523,7 @@ update_formulae() {
   print_status "›" "$accent_cyan" "$(_bfu_count "$count" formula formulae) to upgrade"
 
   print_subsection "Upgrade queue"
-  _bfu_print_queue "$OUTDATED_FORMULAE"
+  _bfu_print_queue "$OUTDATED_FORMULAE" formula
 
   if [[ "$DRY_RUN" == true ]]; then
     printf "\n    ${dim}Dry run: nothing will be installed.${reset}\n"
@@ -559,7 +573,7 @@ update_casks() {
   print_status "›" "$accent_cyan" "$(_bfu_count "$count" application applications) to upgrade"
 
   print_subsection "Upgrade queue"
-  _bfu_print_queue "$OUTDATED_CASKS"
+  _bfu_print_queue "$OUTDATED_CASKS" cask
 
   if [[ "$DRY_RUN" == true ]]; then
     printf "\n    ${dim}Dry run: nothing will be installed.${reset}\n"
@@ -637,6 +651,7 @@ _bfu_update_mas() {
   print_subsection "Pending"
   local line
   while read -r line; do
+    _bfu_emit queued store "$line" "" "" ""
     printf "      ${accent_amber}↑${reset}  %s\n" "$line"
   done <<< "$mas_out"
 
@@ -675,6 +690,7 @@ _bfu_check_macos() {
   print_status "›" "$accent_cyan" "$(_bfu_count "$count" update updates) pending, install in System Settings › General › Software Update"
   local line
   while read -r line; do
+    _bfu_emit queued system "$line" "" "" ""
     printf "      ${accent_amber}↑${reset}  %s\n" "$line"
   done <<< "$pending"
 }
@@ -897,6 +913,13 @@ _bfu_macos_updates() {
   sed -nE 's/^[[:space:]]*Title: ([^,]*), Version: ([^,]*),.*/\1 (\2)/p'
 }
 
+# Progress feed for the native window: with BFU_EVENTS=1, each call prints one
+# "@@BFU kind|field|field" line. Terminal runs never set it, so they see nothing.
+_bfu_emit() {
+  [[ -n "${BFU_EVENTS:-}" ]] || return 0
+  printf '@@BFU %s\n' "${(j:|:)@}"
+}
+
 # Append a header line to the run log.
 _bfu_log() {
   printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$BFU_LOG"
@@ -987,6 +1010,16 @@ _bfu_snapshot() {
   brew list --cask --versions >> "$BFU_LOG" 2>&1
 }
 
+# Admin authentication. The native window sets SUDO_ASKPASS to its own password prompt;
+# otherwise sudo asks in the terminal as before.
+_bfu_sudo_auth() {
+  if [[ -n "${SUDO_ASKPASS:-}" ]]; then
+    sudo -A -v
+  else
+    sudo -v
+  fi
+}
+
 # Stop the sudo keepalive loop and any running step (globals so traps can see them).
 _bfu_cleanup() {
   [[ -n "$BFU_CHILD_PID" ]] && kill "$BFU_CHILD_PID" 2>/dev/null
@@ -1039,6 +1072,8 @@ brew_full_update() {
   local global_start=$SECONDS
   typeset -g BFU_FREE_START=$(_bfu_free_kb)
 
+  # Start from a clean screen so the run reads as one window, not a shell session.
+  [[ -t 1 ]] && clear
   print_top_banner "Brew Command Center"
 
   if ! check_system_health; then
@@ -1056,7 +1091,7 @@ brew_full_update() {
   local ADMIN_OK=true
   if [[ "$DRY_RUN" != true && -n "$OUTDATED_CASKS" ]]; then
     print_status "›" "$accent_cyan" "Admin access needed to install app updates"
-    if sudo -v; then
+    if _bfu_sudo_auth; then
       # Keep the sudo session alive until we are done (&! keeps it out of the job table).
       while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &!
       SUDO_PID=$!

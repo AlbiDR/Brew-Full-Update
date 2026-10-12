@@ -43,6 +43,15 @@ softwareupdate_sample=$'Software Update Tool\n\nFinding available software\nSoft
 eq "macOS: title and version" "$(print -r -- "$softwareupdate_sample" | _bfu_macos_updates)" "macOS Sequoia 15.5 (15.5)"
 eq "macOS: nothing pending" "$(print -r -- "No new software available." | _bfu_macos_updates)" ""
 
+# --- progress feed for the app window
+eq "feed: off by default" "$(_bfu_emit step 1 6 Diagnostics)" ""
+eq "feed: fields joined with |" "$(BFU_EVENTS=1 _bfu_emit step 1 6 Diagnostics)" "@@BFU step|1|6|Diagnostics"
+queue_out=$(BFU_EVENTS=1 _bfu_print_queue $'wget (1.0) < 2.0\nchrome (130.1) != 130.2' cask | grep '^@@BFU')
+eq "feed: queued rows with bump size" "$(print -r -- "$queue_out" | tr '\n' ' ')" "@@BFU queued|cask|wget|1.0|2.0|major @@BFU queued|cask|chrome|130.1|130.2|minor "
+BFU_LAST_ERROR="boom"
+eq "feed: failure reason" "$(BFU_EVENTS=1 print_failure_reason | grep '^@@BFU')" "@@BFU reason|boom"
+BFU_LAST_ERROR=""
+
 # --- failure counter
 BFU_FAILS=0
 print_action_result x fail >/dev/null; print_action_result y done >/dev/null; print_action_result z fail >/dev/null
